@@ -1,0 +1,143 @@
+source("library_causalTS.R")
+
+methods <- c("FOCUS", "mSSA", "SyN-BEATS")
+TT_arr <- 2^c(5:8)
+logT_arr <- 5:8
+R.max <- 30
+n_ind = 2 # N = 64
+
+dgp_ind = 0
+t_ind = 1
+h = 1
+
+for(dgp_ind in c(0:2)){
+
+for(t_ind in c(1:4)){
+
+for(h in c(1:3)){
+
+
+load(sprintf("data_files/DGP%d/DGP%d_out.RData", dgp_ind, dgp_ind))
+
+out_dgp <- switch (as.character(dgp_ind),
+                   "0" = out_dgp0,
+                   "1" = out_dgp1,
+                   "2" = out_dgp2
+)
+
+err_focus <- t(switch(as.character(h),
+                      "1" = out_dgp$rep_focus_h1[n_ind, seq_along(TT_arr), ],
+                      "2" = out_dgp$rep_focus_h2[n_ind, seq_along(TT_arr), ],
+                      "3" = out_dgp$rep_focus_h3[n_ind, seq_along(TT_arr), ]
+))
+
+err_ms <- t(switch(as.character(h),
+                   "1" = out_dgp$rep_ms_h1[n_ind, seq_along(TT_arr), ],
+                   "2" = out_dgp$rep_ms_h2[n_ind, seq_along(TT_arr), ],
+                   "3" = out_dgp$rep_ms_h3[n_ind, seq_along(TT_arr), ]
+))
+
+load(sprintf("data_files/DGP%d/synout_files/synout_DGP%d.RData", dgp_ind, dgp_ind))
+err_syn <- t(switch(as.character(h),
+                    "1" = syn_errors_final$rep_syn_h1,
+                    "2" = syn_errors_final$rep_syn_h2,
+                    "3" = syn_errors_final$rep_syn_h3
+))
+
+
+# log2 errors
+x  <- as.numeric(log2(err_focus[,t_ind]))
+y1 <- as.numeric(log2(err_ms[,t_ind]))
+y2 <- as.numeric(log2(err_syn[,t_ind]))
+
+# raw scale (MSFE)
+x_lin  <- 2^x
+y1_lin <- 2^y1
+y2_lin <- 2^y2
+
+# ---- Wilcoxon signed-rank tests (raw scale) ----
+tests <- list(
+  mSSA     = wilcox.test(x_lin, y1_lin, paired = TRUE, alternative = "less"),
+  SyNBEATS = wilcox.test(x_lin, y2_lin, paired = TRUE, alternative = "less")
+)
+
+# p-value computatiom
+pvals <- tibble(
+  Method = c("mSSA", "SyNBEATS"),
+  pval   = sapply(tests, function(tt) tt$p.value)
+) %>%
+  mutate(
+    expo  = ifelse(pval > 0, floor(log10(pval)), NA_integer_),
+    mant  = ifelse(pval > 0, signif(pval / (10^expo), 3), NA_real_),
+    label = ifelse(pval > 0,
+                   sprintf('paste("Method = %s: ", %.2f%%*%%10^{%d})',
+                           Method, mant, expo),
+                   sprintf('paste("Method = %s: ", "p<1e-300")', Method))
+  )
+
+legend_labels <- parse(text = pvals$label)
+names(legend_labels) <- pvals$Method
+
+
+df <- data.frame(
+  FOCUS = rep(x, 2),
+  Benchmark = c(y1, y2),
+  Method = rep(c("mSSA", "SyNBEATS"), each = length(x))
+)
+
+rng <- range(c(df$FOCUS, df$Benchmark))
+tick_vals <- seq(floor(rng[1]), ceiling(rng[2]), by = 4)
+
+scatter_plt <- ggplot(df, aes(x = FOCUS, y = Benchmark, color = Method, shape = Method)) +
+  geom_abline(intercept = 0, slope = 1, 
+              linetype = "dashed", color = "#0072B2", linewidth = 1.0) +
+  geom_point(size = 5, alpha = 0.7) +
+  scale_color_manual(
+    values = c("mSSA" = "#D55E00", "SyNBEATS" = "#009E73"),
+    labels = legend_labels
+  ) +
+  scale_shape_manual(
+    values = c("mSSA" = 16, "SyNBEATS" = 18),
+    labels = legend_labels
+  ) +
+  scale_x_continuous(
+    name = "MSFE (FOCUS)",
+    limits = rng,
+    breaks = tick_vals,
+    labels = function(x) parse(text = paste0("2^", x))
+  ) +
+  scale_y_continuous(
+    name = "MSFE (Method)",
+    limits = rng,
+    breaks = tick_vals,
+    labels = function(x) parse(text = paste0("2^", x))
+  ) +
+  labs(title = sprintf("DGP-%d, h = %d (T = %d)", dgp_ind+1, h, TT_arr[t_ind])) +
+  theme_minimal(base_size = 16) +
+  theme(
+    legend.title = element_blank(),
+    legend.position = c(0.20, 0.23),
+    legend.justification = c(0, 1),
+    legend.text = element_text(size = 16),
+    legend.background = element_rect(fill = scales::alpha("white", 0.3), color = NA),
+    legend.box.background = element_blank(),
+    axis.title.x = element_text(size = 20, face = "plain"),
+    axis.title.y = element_text(size = 20, face = "plain"),
+    axis.text = element_text(size = 20),
+    plot.title = element_text(hjust = 0.5, size = 24, face = "plain"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(color = "gray85", linewidth = 0.3),
+    axis.line = element_line(color = "black"),
+    axis.line.y.right = element_blank(),
+    axis.line.x.top   = element_blank()
+  )
+
+if (dgp_ind == 0 && h == 1) plt1 <- scatter_plt
+if (dgp_ind == 0 && h == 2) plt2 <- scatter_plt
+
+plt_name <- sprintf("aistats_out/scatter_plots/scatter_plot_DGP%d_T%d_h%d.pdf", dgp_ind, TT_arr[t_ind], h)
+ggsave(plt_name, plot = scatter_plt, width = 6, height = 6)
+
+}
+}
+}

@@ -1,0 +1,28 @@
+{
+    "id": "4E1A76A8",
+    "path": "~/causal_forecast/Vignette.Rmd",
+    "project_path": "Vignette.Rmd",
+    "type": "r_markdown",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1760034583475.0,
+    "source_on_save": false,
+    "relative_order": 9,
+    "properties": {
+        "tempName": "Untitled1",
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "4,39",
+        "scrollLine": "0",
+        "last_setup_crc32": "b90096d1bb338d19"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1760078467,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1760078467622,
+    "read_only": false,
+    "read_only_alternatives": []
+}

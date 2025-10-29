@@ -1,0 +1,1130 @@
+source('library_causalTS.R')
+library(ggplot2)
+library(glmnet)
+library(tseries)
+library(forecast)
+library(astsa)
+
+
+# ANALYSIS CONSIDERING ALL 5 SLOTS
+######################################################
+
+### First load the data frames W and Y from the cleaning file
+### Set T near 150/200, since after that most users are not treated
+### time t = 1 is excluded since no user was treated then.
+### The last 5 observations are reserved for test/validation
+
+TT <- 105
+
+W <- as.matrix(W_full[, 2:(TT+1)])
+Y <- as.matrix(Y_full[, 2:(TT+1)])
+
+TT_train <- 101
+Y_train = Y[, 1:TT_train]
+
+W_train <- W[, 1:TT_train] + 0
+W_train[is.na(W_train)] <- 0
+W_train[is.na(Y_train)] <- 0
+
+
+### Calculate the common treatment points, follow XP'23.
+
+N <- nrow(Y_train)
+Q <- matrix(list(), nrow = N, ncol = N)
+
+for(i in 1:N){
+  for(j in 1:N){
+    Q[[i, j]] <- as.vector(which(W_train[i,] == 1 & W_train[j,] == 1))
+  }
+}
+
+length_Q <- matrix(sapply(Q, length), nrow = nrow(Q), ncol = ncol(Q))
+which(length_Q<=1, arr.ind = TRUE)
+bad_users <- c(31)
+
+Y_train <- Y_train[-bad_users,]
+W_train <- W_train[-bad_users,]
+Q <- Q[-bad_users, -bad_users]
+
+# Reshape the train and test panel sizes
+N <- nrow(Y_train)
+
+### PCA & estimate the factors
+
+Sigma_hat <- matrix(nrow = N, ncol = N)
+
+for(i in 1:N){
+  for(j in 1:N){
+    run_ind <- Q[[i, j]]
+    Sigma_hat[i, j] <- sum(Y_train[i, run_ind] * Y_train[j, run_ind])/length(run_ind)
+  }
+}
+
+Sigma_eigen <- prcomp(Sigma_hat / N, scale. = TRUE)
+# x = 100 * cumsum(Sigma_eigen$sdev^2)/sum(Sigma_eigen$sdev^2)
+# plot(x, type = 'b', col = 'red')
+
+### ad-hoc choice of 70% variance explanation
+# r = which(x >= 75)[1]
+r = 4
+# r = 4 gives smallest sse
+
+L_est <- sqrt(N) * Sigma_eigen$rotation[,c(1:r)]
+
+F_est <- array(0, dim = c(TT_train, r))
+
+for(t in 1:TT_train){
+  WLL <- matrix(0, nrow = r, ncol = r)
+  WLY <- numeric(r)
+  for(i in 1:N){
+    if(W_train[i,t] == 1){
+      Li <- t(as.matrix(L_est[i,,drop = F]))
+      WLL <- WLL + Li %*% t(Li) 
+      WLY <- WLY + Y_train[i,t] * Li
+    }
+  }
+  F_est[t,] <- solve(WLL) %*% WLY
+}
+
+
+### Second approach, perform PCA on the other covariance matrix
+
+N <- nrow(Y_train)
+length(TT_train)
+Q <- matrix(list(), nrow = N, ncol = N)
+
+for(i in 1:N){
+  for(j in 1:N){
+    Q[[i, j]] <- as.vector(which(W_train[i,] == 1 & W_train[j,] == 1))
+  }
+}
+
+length_Q <- matrix(sapply(Q, length), nrow = nrow(Q), ncol = ncol(Q))
+which(length_Q<=1, arr.ind = TRUE)
+bad_users <- c(31)
+
+Y_train <- Y_train[-bad_users,]
+W_train <- W_train[-bad_users,]
+Q <- Q[-bad_users, -bad_users]
+
+# Reshape the train and test panel sizes
+N <- nrow(Y_train)
+
+### PCA & estimate the factors
+
+Sigma_hat <- matrix(nrow = N, ncol = N)
+
+for(i in 1:N){
+  for(j in 1:N){
+    run_ind <- Q[[i, j]]
+    Sigma_hat[i, j] <- sum(Y_train[i, run_ind] * Y_train[j, run_ind])/length(run_ind)
+  }
+}
+
+Sigma_eigen <- prcomp(Sigma_hat / N, scale. = TRUE)
+# x = 100 * cumsum(Sigma_eigen$sdev^2)/sum(Sigma_eigen$sdev^2)
+# plot(x, type = 'b', col = 'red')
+
+### ad-hoc choice of 70% variance explanation
+# r = which(x >= 75)[1]
+r = 4
+# r = 4 gives smallest sse
+
+L_est <- sqrt(N) * Sigma_eigen$rotation[,c(1:r)]
+
+F_est <- array(0, dim = c(TT_train, r))
+
+for(t in 1:TT_train){
+  WLL <- matrix(0, nrow = r, ncol = r)
+  WLY <- numeric(r)
+  for(i in 1:N){
+    if(W_train[i,t] == 1){
+      Li <- t(as.matrix(L_est[i,,drop = F]))
+      WLL <- WLL + Li %*% t(Li) 
+      WLY <- WLY + Y_train[i,t] * Li
+    }
+  }
+  F_est[t,] <- solve(WLL) %*% WLY
+}
+
+
+
+
+
+# Current goal is to forecast at slot 3 based on slot 2
+
+f2 = F_est[c(seq(1, TT_train, by = 5)),]
+f2_test = f2[nrow(f2),]
+f2 = f2[-nrow(f2),]
+
+f3 = F_est[c(seq(2, TT_train, by = 5)),]
+f4 = F_est[c(seq(3, TT_train, by = 5)),]
+f5 = F_est[c(seq(4, TT_train, by = 5)),]
+f1 = F_est[c(seq(5, TT_train, by = 5)),]
+
+data_cor <- data.frame(
+  F2 = f2[, 1],
+  F3 = f3[, 1]
+)
+cor_value <- round(cor(data_cor$F2, data_cor$F3), 2)
+ggplot(data_cor, aes(x = F2, y = F3)) +
+  geom_point(color = "maroon", size = 3) + 
+  labs(
+    x = expression(hat(F)[slot == 2 * "," ~ 1]),
+    y = expression(hat(F)[slot == 3 * "," ~ 1]),
+    title = bquote("Subsetted factors, " ~ 
+                     Cor(hat(F)[slot == 2 * "," ~ 1],
+                         hat(F)[slot == 3 * "," ~ 1]) ~ "=" ~ .(cor_value))
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 12),  
+    plot.title = element_text(size = 15, hjust = 0.5),
+    axis.title = element_text(size = 14)
+  )
+
+A_23 = (t(f3) %*% f2) %*% solve(t(f2) %*% f2)
+
+Y_test <- as.vector(Y[-bad_users, TT_train+1])
+Y_for <- as.vector(L_est %*% (A_23 %*% f2_test)) 
+
+### Calculate the forecast error with MSSA
+Y_train_ms <- as.matrix(Y_train)
+rownames(Y_train_ms) = colnames(Y_train_ms) = NULL
+Y_for_ms <- vector(length = N)
+for(i in 1:N){
+  Y_for_ms[i] = forecast.mssa(t(Y_train_ms), for_ind = i, t_start = ncol(Y_train) + 1)
+}
+
+
+# Only predict non-zero entries
+z = which(Y_test == 0)
+
+u = (Y_for[z] - Y_test[z])^2
+v = (Y_for_ms[z] - Y_test[z])^2
+
+w = (Y_for[-z] - Y_test[-z])^2/(Y_test[-z])^2
+a = (Y_for_ms[-z] - Y_test[-z])^2/(Y_test[-z])^2
+
+pca_reg_z <- c(round(mean(u, na.rm = TRUE), 2),
+          round(sd(u, na.rm = TRUE), 2),
+          round(median(u, na.rm = TRUE), 2))
+
+ms_z <- c(round(mean(v, na.rm = TRUE), 2),
+               round(sd(v, na.rm = TRUE), 2),
+               round(median(v, na.rm = TRUE), 2))
+
+pca_reg_nz <- c(round(100 * mean(w, na.rm = TRUE), 2),
+               round(100 * sd(w, na.rm = TRUE), 2),
+               round(100 * median(w, na.rm = TRUE), 2))
+
+ms_nz <- c(round(100 * mean(a, na.rm = TRUE), 2),
+                round(100 * sd(a, na.rm = TRUE), 2),
+                round(100 * median(a, na.rm = TRUE), 2))
+
+sse_pca_reg = sum((Y_for - Y_test)^2, na.rm = T)
+sse_ms = sum((Y_for_ms - Y_test)^2, na.rm = T)
+
+tab1 <- cbind(rbind(pca_reg_nz, ms_nz), 
+              rbind(pca_reg_z, ms_z),
+              rbind(sse_pca_reg, sse_ms))
+tab1 <- as.data.frame(tab1)
+rownames(tab1) <- c("pca_reg", "ms")
+colnames(tab1) <- c("mean_nz", "sd_nz", "med_nz",
+                    "mean_z", "sd_z", "med_z", "sse")
+
+
+##########################################################
+### Scatterplot of predicted and test outcomes for treated users
+# `Y_test` and `Y_for` are numeric vectors, and `n_users` is the number of unique users.
+
+# Create a data frame for plotting
+data_test <- data.frame(
+  User = seq_along(Y_test),  # User indices
+  Outcome = Y_test,
+  Group = "Test data"  # Label for legend
+)
+# Create a separate data frame for the points in Y_for
+data_for <- data.frame(
+  User = seq_along(Y_for),  # User indices
+  Outcome = Y_for,
+  Group = "PCA-Reg"  # Label for legend
+)
+
+data_for_mssa <- data.frame(
+  User = seq_along(Y_for_ms),  # User indices
+  Outcome = Y_for_ms,
+  Group = "mSSA"  # Label for legend
+)
+
+# Combine the datasets
+combined_data <- rbind(data_test, data_for, data_for_mssa)
+# Plot using ggplot2
+scatter_23_1 <- ggplot(combined_data, aes(x = User, y = Outcome, color = Group)) +
+  geom_vline(xintercept = 1:n_users, linetype = "dashed", color = "skyblue") +  # Vertical lines
+  geom_point(aes(shape = Group), size = 3) +  # Points for both Y_test and Y_for
+  scale_color_manual(
+    values = c("Test data" = "darkorange", 
+               "PCA-Reg" = "forestgreen",
+               "mSSA" = "blue2")  # Custom colors
+  ) +
+  scale_y_continuous(limits = range(Y_test, na.rm = TRUE)) +  # Match ylim
+  labs(
+    title = paste0("1-step Forecast at t = ", TT_train + 1, " (slot 3)"),
+    x = "User",
+    y = "log-Steps",
+    color = "",  # Legend title
+    shape = ""   # Shape legend title
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14),  # Center title and increase size
+    axis.title.x = element_text(size = 12),  # Increase x-axis label size
+    axis.title.y = element_text(size = 12),  # Increase y-axis label size
+    legend.title = element_text(size = 12),  # Increase legend title size
+    legend.text = element_text(size = 10)    # Increase legend text size
+  )
+
+
+
+### Histogram code
+# Zero entries
+data <- data.frame(
+  value = c(
+    Y_for[z] - Y_test[z], 
+    Y_for_ms[z] - Y_test[z]),
+  group = factor(c(rep("PCA-Reg", length(z)), 
+                   rep("mSSA", length(z))))
+)
+
+hist_23_z_1 <- ggplot(data, aes(x = value, fill = group)) +
+  geom_histogram(position = "identity", alpha = 0.5, bins = 8, color = 'black') +
+  scale_fill_manual(values = c("blue", "red")) +  # Custom colors for groups
+  ggtitle(paste("t = ", TT_train + 1," (slot 3), Y = 0")) +
+  theme(
+    plot.title = element_text(hjust = 0.5),  # Center the title
+    legend.title = element_blank()           # Remove legend title
+  ) +
+  labs(x = expression(hat(Y) - Y), y = "Frequency")  # Axis labels
+
+# Non-zero entries
+
+data <- data.frame(
+  value = c(
+    Y_for[-z] - Y_test[-z], 
+    Y_for_ms[-z] - Y_test[-z]),
+  group = factor(c(rep("PCA-Reg", length(Y_for) - length(z)), 
+                   rep("mSSA", length(Y_for) - length(z))))
+)
+
+hist_23_nz_1 <- ggplot(data, aes(x = value, fill = group)) +
+  geom_histogram(position = "identity", alpha = 0.5, bins = 8, color = 'black') +
+  scale_fill_manual(values = c("blue", "red")) +  # Custom colors for groups
+  ggtitle(paste("t = ", TT_train + 1," (slot 3), Y > 0")) +
+  theme(
+    plot.title = element_text(hjust = 0.5),  # Center the title
+    legend.title = element_blank()           # Remove legend title
+  ) +
+  labs(x = expression(hat(Y) - Y), y = "Frequency")  # Axis labels
+
+
+
+
+
+
+##################################################
+##################################################
+##################################################
+
+### DO THE SAME EXERCISE FOR SLOT PAIR (4,5)
+### Extract a new training panel according to the slot pair (4,5)
+
+# First set T_train to 203 for slot pair 4->5 forecast
+
+TT_train <- 203
+Y_train = Y[, 1:TT_train]
+
+### Make the same change of time indices here as well, i.e. if 2:(TT+1) or TT_ind_xyz is applicable.
+
+W_train <- W[, 1:TT_train] + 0
+W_train[is.na(W_train)] <- 0 
+W_train[is.na(Y_train)] <- 0
+
+
+### Calculate the common treatment points, follow XP'23.
+
+N <- nrow(Y_train)
+Q <- matrix(list(), nrow = N, ncol = N)
+
+for(i in 1:N){
+  for(j in 1:N){
+    Q[[i, j]] <- as.vector(which(W_train[i,] == 1 & W_train[j,] == 1))
+  }
+}
+
+length_Q <- matrix(sapply(Q, length), nrow = nrow(Q), ncol = ncol(Q))
+
+# View(length_Q)
+
+which(length_Q<=1, arr.ind = TRUE)
+
+### The zero/small intersection of the observation pattern seem to be invoked by user index 31, hence we consider user 31 as a "bad user" and discard the corresponding rows from both W and Y.
+
+bad_users <- c(31)
+
+Y_train <- Y_train[-bad_users,]
+W_train <- W_train[-bad_users,]
+Q <- Q[-bad_users, -bad_users]
+
+# Reshape the train and test panel sizes
+N <- nrow(Y_train)
+
+### PCA & estimate the factors
+
+# CALCULATE Sigma_tilde!!!
+
+Sigma_hat <- matrix(nrow = N, ncol = N)
+
+for(i in 1:N){
+  for(j in 1:N){
+    run_ind <- Q[[i, j]]
+    Sigma_hat[i, j] <- sum(Y_train[i, run_ind] * Y_train[j, run_ind])/length(run_ind)
+  }
+}
+
+Sigma_eigen <- prcomp(Sigma_hat/N, scale. = TRUE)
+x = 100 * cumsum(Sigma_eigen$sdev^2)/sum(Sigma_eigen$sdev^2)
+# plot(x, type = 'b', col = 'red')
+
+### ad-hoc choice of 70% variance explanation
+# r = which(x >= 75)[1]
+r = 3
+# r = 3 gives smallest sse
+
+L_est <- sqrt(N) * Sigma_eigen$rotation[,c(1:r)]
+
+F_est <- array(0, dim = c(TT_train, r))
+
+for(t in 1:TT_train){
+  WLL <- matrix(0, nrow = r, ncol = r)
+  WLY <- numeric(r)
+  for(i in 1:N){
+    if(W_train[i,t] == 1){
+      Li <- t(as.matrix(L_est[i,,drop = F]))
+      WLL <- WLL + Li %*% t(Li) 
+      WLY <- WLY + Y_train[i,t] * Li
+    }
+  }
+  F_est[t,] <- solve(WLL) %*% WLY
+}
+
+# Current goal is to forecast slot 4  ---> slot 5
+
+f2 = F_est[c(seq(1, TT_train, by = 5)),]
+f3 = F_est[c(seq(2, TT_train, by = 5)),]
+f4 = F_est[c(seq(3, TT_train, by = 5)),]
+f4_test = f4[nrow(f4),]
+f4 = f4[-nrow(f4),]
+
+f5 = F_est[c(seq(4, TT_train, by = 5)),]
+f1 = F_est[c(seq(5, TT_train, by = 5)),]
+
+data_cor <- data.frame(
+  F4 = f4[, 1],
+  F5 = f5[, 1]
+)
+cor_value <- round(cor(data_cor$F4, data_cor$F5), 2)
+ggplot(data_cor, aes(x = F4, y = F5)) +
+  geom_point(color = "green4", size = 3) + 
+  labs(
+    x = expression(hat(F)[slot == 4 * "," ~ 1]),
+    y = expression(hat(F)[slot == 5 * "," ~ 1]),
+    title = bquote("Subsetted factors, " ~ 
+                     Cor(hat(F)[slot == 4 * "," ~ 1],
+                         hat(F)[slot == 5 * "," ~ 1]) ~ "=" ~ .(cor_value))
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 12),  
+    plot.title = element_text(size = 15, hjust = 0.5),
+    axis.title = element_text(size = 14)
+  )
+
+
+A_45 = (t(f5) %*% f4) %*% solve(t(f4) %*% f4)
+
+Y_test <- as.vector(Y[-bad_users, TT_train+1])
+Y_for <- as.vector(L_est %*% (A_45 %*% f4_test)) 
+
+### Calculate the forecast error with MSSA
+Y_train_ms <- as.matrix(Y_train)
+rownames(Y_train_ms) = colnames(Y_train_ms) = NULL
+Y_for_ms <- vector(length = N)
+for(i in 1:N){
+  Y_for_ms[i] = forecast.mssa(t(Y_train_ms), for_ind = i, t_start = ncol(Y_train) + 1)
+}
+
+
+# Only predict non-zero entries
+z = which(Y_test == 0)
+
+u = (Y_for[z] - Y_test[z])^2
+v = (Y_for_ms[z] - Y_test[z])^2
+
+w = (Y_for[-z] - Y_test[-z])^2/(Y_test[-z])^2
+a = (Y_for_ms[-z] - Y_test[-z])^2/(Y_test[-z])^2
+
+pca_reg_z <- c(round(mean(u, na.rm = TRUE), 2),
+               round(sd(u, na.rm = TRUE), 2),
+               round(median(u, na.rm = TRUE), 2))
+
+ms_z <- c(round(mean(v, na.rm = TRUE), 2),
+              round(sd(v, na.rm = TRUE), 2),
+              round(median(v, na.rm = TRUE), 2))
+
+pca_reg_nz <- c(round(100 * mean(w, na.rm = TRUE), 2),
+                round(100 * sd(w, na.rm = TRUE), 2),
+                round(100 * median(w, na.rm = TRUE), 2))
+
+ms_nz <- c(round(100 * mean(a, na.rm = TRUE), 2),
+               round(100 * sd(a, na.rm = TRUE), 2),
+               round(100 * median(a, na.rm = TRUE), 2))
+
+sse_pca_reg = sum((Y_for - Y_test)^2, na.rm = T)
+sse_ms = sum((Y_for_ms - Y_test)^2, na.rm = T)
+
+tab2 <- cbind(rbind(pca_reg_nz, ms_nz), 
+              rbind(pca_reg_z, ms_z),
+              rbind(sse_pca_reg, sse_ms))
+tab2 <- as.data.frame(tab2)
+rownames(tab2) <- c("pca_reg", "ms")
+colnames(tab2) <- c("mean_nz", "sd_nz", "med_nz",
+                    "mean_z", "sd_z", "med_z", "sse")
+
+
+
+##########################################################
+### Scatterplot of predicted and test outcomes for treated users
+# `Y_test` and `Y_for` are numeric vectors, and `n_users` is the number of unique users.
+
+# Create a data frame for plotting
+data_test <- data.frame(
+  User = seq_along(Y_test),  # User indices
+  Outcome = Y_test,
+  Group = "Test data"  # Label for legend
+)
+# Create a separate data frame for the points in Y_for
+data_for <- data.frame(
+  User = seq_along(Y_for),  # User indices
+  Outcome = Y_for,
+  Group = "PCA-Reg"  # Label for legend
+)
+
+data_for_mssa <- data.frame(
+  User = seq_along(Y_for_ms),  # User indices
+  Outcome = Y_for_ms,
+  Group = "mSSA"  # Label for legend
+)
+
+# Combine the datasets
+combined_data <- rbind(data_test, data_for, data_for_mssa)
+# Plot using ggplot2
+scatter_45_1 <- ggplot(combined_data, aes(x = User, y = Outcome, color = Group)) +
+  geom_vline(xintercept = 1:n_users, linetype = "dashed", color = "skyblue") +  # Vertical lines
+  geom_point(aes(shape = Group), size = 3) +  # Points for both Y_test and Y_for
+  scale_color_manual(
+    values = c("Test data" = "darkorange", 
+               "PCA-Reg" = "forestgreen",
+               "mSSA" = "blue2")  # Custom colors
+  ) +
+  scale_y_continuous(limits = range(Y_test, na.rm = TRUE)) +  # Match ylim
+  labs(
+    title = paste0("1-step Forecast at t = ", TT_train + 1, " (slot 5)"),
+    x = "User",
+    y = "log-Steps",
+    color = "",  # Legend title
+    shape = ""   # Shape legend title
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14),  # Center title and increase size
+    axis.title.x = element_text(size = 12),  # Increase x-axis label size
+    axis.title.y = element_text(size = 12),  # Increase y-axis label size
+    legend.title = element_text(size = 12),  # Increase legend title size
+    legend.text = element_text(size = 10)    # Increase legend text size
+  )
+
+
+
+### Histogram code
+# Zero entries
+data <- data.frame(
+  value = c(
+    Y_for[z] - Y_test[z], 
+    Y_for_ms[z] - Y_test[z]),
+  group = factor(c(rep("PCA-Reg", length(z)), 
+                   rep("mSSA", length(z))))
+)
+
+hist_45_z_1 <- ggplot(data, aes(x = value, fill = group)) +
+  geom_histogram(position = "identity", alpha = 0.5, bins = 8, color = 'black') +
+  scale_fill_manual(values = c("blue", "red")) +  # Custom colors for groups
+  ggtitle(paste("t = ", TT_train + 1," (slot 5), Y = 0")) +
+  theme(
+    plot.title = element_text(hjust = 0.5),  # Center the title
+    legend.title = element_blank()           # Remove legend title
+  ) +
+  labs(x = expression(hat(Y) - Y), y = "Frequency")  # Axis labels
+
+# Non-zero entries
+
+data <- data.frame(
+  value = c(
+    Y_for[-z] - Y_test[-z], 
+    Y_for_ms[-z] - Y_test[-z]),
+  group = factor(c(rep("PCA-Reg", length(Y_for) - length(z)), 
+                   rep("mSSA", length(Y_for) - length(z))))
+)
+
+hist_45_nz_1 <- ggplot(data, aes(x = value, fill = group)) +
+  geom_histogram(position = "identity", alpha = 0.5, bins = 8, color = 'black') +
+  scale_fill_manual(values = c("blue", "red")) +  # Custom colors for groups
+  ggtitle(paste("t = ", TT_train + 1," (slot 5), Y > 0")) +
+  theme(
+    plot.title = element_text(hjust = 0.5),  # Center the title
+    legend.title = element_blank()           # Remove legend title
+  ) +
+  labs(x = expression(hat(Y) - Y), y = "Frequency")  # Axis labels
+
+
+
+
+
+
+
+##################################################
+##################################################
+##################################################
+
+
+
+# To-Do: Fit VAR(1)-type models with slot pairs (2,3) and (4,5)
+# Is the variation in PC1 enough to ensure strong serial corr across all PC's? Verify! (Ans- likely, yes!)
+# Q2: Can we encounter both together?
+
+
+
+
+
+
+##################################################
+##################################################
+##################################################
+### SLOT SPECIFIC ANALYSIS
+### Similar to the previous analysis, start with 2->3 and 4->5
+
+### First try with slot pair (2,3)
+
+TT_23 <- sort(c(seq(1, TT, by = 5), seq(2, TT, by = 5)))
+
+TT_train <- TT_23[-length(TT_23)]
+TT_test <- TT_23[length(TT_23)]
+
+Y_train <- Y[,TT_train]
+Y_test <- Y[,TT_test]
+
+W_train <- 1 - (W[, TT_train] + 0)
+W_train[is.na(W_train)] <- 0 
+W_train[is.na(Y_train)] <- 0
+
+N <- nrow(Y_train)
+Q <- matrix(list(), nrow = N, ncol = N)
+
+for(i in 1:N){
+  for(j in 1:N){
+    Q[[i, j]] <- as.vector(which(W_train[i,] == 1 & W_train[j,] == 1))
+  }
+}
+
+length_Q <- matrix(sapply(Q, length), nrow = nrow(Q), ncol = ncol(Q))
+
+which(length_Q==0, arr.ind = TRUE)
+
+### The zero/small intersection of the observation pattern seem to be invoked by user index 31, hence we consider user 31 as a "bad user" and discard the corresponding rows from both W and Y.
+
+bad_users <- c(31, 36, 29)
+
+Y_train <- Y_train[-bad_users,]
+W_train <- W_train[-bad_users,]
+Q <- Q[-bad_users, -bad_users]
+Y_test <- Y_test[-bad_users]
+
+# Reshape the train and test panel sizes
+N <- nrow(Y_train)
+
+### PCA & estimate the factors
+### CALCULATE Sigma_tilde
+
+Sigma_tilde <- matrix(nrow = N, ncol = N)
+
+for(i in 1:N){
+  for(j in 1:N){
+    run_ind <- Q[[i, j]]
+    Sigma_tilde[i, j] <- sum(Y_train[i, run_ind] * Y_train[j, run_ind])/length(run_ind)
+  }
+}
+
+Sigma_eigen <- prcomp(Sigma_tilde/N, scale. = TRUE)
+x = 100 * cumsum(Sigma_eigen$sdev^2)/sum(Sigma_eigen$sdev^2)
+# plot(x, type = 'b', col = 'red')
+
+### ad-hoc choice of 70% variance explanation
+# r = which(x >= 75)[1]
+r = 3
+# r = 3 gives smallest sse
+
+L_est <- sqrt(N) * Sigma_eigen$rotation[,c(1:r)]
+
+F_est <- array(0, dim = c(length(TT_train), r))
+
+for(t in 1:length(TT_train)){
+  WLL <- matrix(0, nrow = r, ncol = r)
+  WLY <- numeric(r)
+  for(i in 1:N){
+    if(W_train[i,t] == 1){
+      Li <- t(as.matrix(L_est[i,,drop = F]))
+      WLL <- WLL + Li %*% t(Li) 
+      WLY <- WLY + Y_train[i,t] * Li
+    }
+  }
+  F_est[t,] <- solve(WLL) %*% WLY
+}
+
+u <- which(seq_along(1:nrow(F_est)) %% 2 != 0) 
+f2 <- F_est[u, ]
+f2_test <- f2[nrow(f2), ]
+f2 <- f2[-nrow(f2), ]
+
+f3 <- F_est[-u, ]
+
+data_cor <- data.frame(
+  F2 = f2[, 1],
+  F3 = f3[, 1]
+)
+cor_value <- round(cor(data_cor$F2, data_cor$F3), 2)
+ggplot(data_cor, aes(x = F2, y = F3)) +
+  geom_point(color = "maroon", size = 3) + 
+  labs(
+    x = expression(hat(F)[slot == 2 * "," ~ 1]),
+    y = expression(hat(F)[slot == 3 * "," ~ 1]),
+    title = bquote("Subsetted panel, " ~ 
+                     Cor(hat(F)[slot == 2 * "," ~ 1],
+                         hat(F)[slot == 3 * "," ~ 1]) ~ "=" ~ .(cor_value))
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 12),  
+    plot.title = element_text(size = 15, hjust = 0.5),
+    axis.title = element_text(size = 14)
+  )
+
+A_23 = (t(f3) %*% f2) %*% solve(t(f2) %*% f2)
+
+Y_test <- as.vector(Y[-bad_users, TT_test])
+
+Y_for <- as.vector(L_est %*% (A_23 %*% f2_test)) 
+
+### Calculate the forecast error with MSSA
+Y_train_ms <- as.matrix(Y_train)
+rownames(Y_train_ms) = colnames(Y_train_ms) = NULL
+Y_for_ms <- vector(length = N)
+for(i in 1:N){
+  Y_for_ms[i] = forecast.mssa(t(Y_train_ms), for_ind = i, t_start = ncol(Y_train) + 1)
+}
+
+
+# Only predict non-zero entries
+z = which(Y_test == 0)
+
+u = (Y_for[z] - Y_test[z])^2
+v = (Y_for_ms[z] - Y_test[z])^2
+
+w = (Y_for[-z] - Y_test[-z])^2/(Y_test[-z])^2
+a = (Y_for_ms[-z] - Y_test[-z])^2/(Y_test[-z])^2
+
+pca_reg_z <- c(round(mean(u, na.rm = TRUE), 2),
+               round(sd(u, na.rm = TRUE), 2),
+               round(median(u, na.rm = TRUE), 2))
+
+ms_z <- c(round(mean(v, na.rm = TRUE), 2),
+              round(sd(v, na.rm = TRUE), 2),
+              round(median(v, na.rm = TRUE), 2))
+
+pca_reg_nz <- c(round(100 * mean(w, na.rm = TRUE), 2),
+                round(100 * sd(w, na.rm = TRUE), 2),
+                round(100 * median(w, na.rm = TRUE), 2))
+
+ms_nz <- c(round(100 * mean(a, na.rm = TRUE), 2),
+               round(100 * sd(a, na.rm = TRUE), 2),
+               round(100 * median(a, na.rm = TRUE), 2))
+sse_pca_reg = sum((Y_for - Y_test)^2, na.rm = T)
+sse_ms = sum((Y_for_ms - Y_test)^2, na.rm = T)
+
+tab3 <- cbind(rbind(pca_reg_nz, ms_nz), 
+              rbind(pca_reg_z, ms_z),
+              rbind(sse_pca_reg, sse_ms))
+tab3 <- as.data.frame(tab3)
+rownames(tab3) <- c("pca_reg", "ms")
+colnames(tab3) <- c("mean_nz", "sd_nz", "med_nz",
+                    "mean_z", "sd_z", "med_z", "sse")
+
+
+##########################################################
+### Scatterplot of predicted and test outcomes for treated users
+# `Y_test` and `Y_for` are numeric vectors, and `n_users` is the number of unique users.
+
+# Create a data frame for plotting
+data_test <- data.frame(
+  User = seq_along(Y_test),  # User indices
+  Outcome = Y_test,
+  Group = "Test data"  # Label for legend
+)
+# Create a separate data frame for the points in Y_for
+data_for <- data.frame(
+  User = seq_along(Y_for),  # User indices
+  Outcome = Y_for,
+  Group = "PCA-Reg-sub"  # Label for legend
+)
+
+data_for_mssa <- data.frame(
+  User = seq_along(Y_for_ms),  # User indices
+  Outcome = Y_for_ms,
+  Group = "mSSA-sub"  # Label for legend
+)
+
+# Combine the datasets
+combined_data <- rbind(data_test, data_for, data_for_mssa)
+# Plot using ggplot2
+scatter_23_2 <- ggplot(combined_data, aes(x = User, y = Outcome, color = Group)) +
+  geom_vline(xintercept = 1:n_users, linetype = "dashed", color = "skyblue") +  # Vertical lines
+  geom_point(aes(shape = Group), size = 3) +  # Points for both Y_test and Y_for
+  scale_color_manual(
+    values = c("Test data" = "darkorange", 
+               "PCA-Reg-sub" = "forestgreen",
+               "mSSA-sub" = "blue2")  # Custom colors
+  ) +
+  scale_y_continuous(limits = range(Y_test, na.rm = TRUE)) +  # Match ylim
+  labs(
+    title = "1-step Forecast at t = 202 (slot 3)",
+    x = "User",
+    y = "log-Steps",
+    color = "",  # Legend title
+    shape = ""   # Shape legend title
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14),  # Center title and increase size
+    axis.title.x = element_text(size = 12),  # Increase x-axis label size
+    axis.title.y = element_text(size = 12),  # Increase y-axis label size
+    legend.title = element_text(size = 12),  # Increase legend title size
+    legend.text = element_text(size = 10)    # Increase legend text size
+  )
+
+
+
+### Histogram code
+# Zero entries
+data <- data.frame(
+  value = c(
+    Y_for[z] - Y_test[z], 
+    Y_for_ms[z] - Y_test[z]),
+  group = factor(c(rep("PCA-Reg-sub", length(z)), 
+                   rep("mSSA-sub", length(z))))
+)
+
+hist_23_z_2 <- ggplot(data, aes(x = value, fill = group)) +
+  geom_histogram(position = "identity", alpha = 0.5, bins = 8, color = 'black') +
+  scale_fill_manual(values = c("blue", "red")) +  # Custom colors for groups
+  ggtitle("t = 202 (slot 3), Y = 0") +
+  theme(
+    plot.title = element_text(hjust = 0.5),  # Center the title
+    legend.title = element_blank()           # Remove legend title
+  ) +
+  labs(x = expression(hat(Y) - Y), y = "Frequency")  # Axis labels
+
+# Non-zero entries
+
+data <- data.frame(
+  value = c(
+    Y_for[-z] - Y_test[-z], 
+    Y_for_ms[-z] - Y_test[-z]),
+  group = factor(c(rep("PCA-Reg-sub", length(Y_for) - length(z)), 
+                   rep("mSSA-sub", length(Y_for) - length(z))))
+)
+
+hist_23_nz_2 <- ggplot(data, aes(x = value, fill = group)) +
+  geom_histogram(position = "identity", alpha = 0.5, bins = 8, color = 'black') +
+  scale_fill_manual(values = c("blue", "red")) +  # Custom colors for groups
+  ggtitle("t = 202 (slot 3), Y > 0") +
+  theme(
+    plot.title = element_text(hjust = 0.5),  # Center the title
+    legend.title = element_blank()           # Remove legend title
+  ) +
+  labs(x = expression(hat(Y) - Y), y = "Frequency")  # Axis labels
+
+
+
+
+
+
+
+
+########################################################
+########################################################
+########################################################
+### Next try with slot pair (4,5)
+### Every pair of 3rd and 4th entries refer to the slot pair (4,5) since the first time point is removed due to no available observation in the treated panel
+
+TT_4 <- seq(3, TT, by = 5)
+TT_5 <- seq(4, TT, by = 5)
+TT_45 <- sort(c(TT_4, TT_5))
+
+TT_train <- TT_45[-length(TT_45)]
+TT_test <- TT_45[length(TT_45)]
+
+Y_train <- Y[,TT_train]
+Y_test <- Y[,TT_test]
+
+W_train <- (W[, TT_train]) + 0
+W_train[is.na(W_train)] <- 0 
+W_train[is.na(Y_train)] <- 0
+
+N <- nrow(Y_train)
+Q <- matrix(list(), nrow = N, ncol = N)
+
+for(i in 1:N){
+  for(j in 1:N){
+    Q[[i, j]] <- as.vector(which(W_train[i,] == 1 & W_train[j,] == 1))
+  }
+}
+
+length_Q <- matrix(sapply(Q, length), nrow = nrow(Q), ncol = ncol(Q))
+
+which(length_Q == 0, arr.ind = TRUE)
+
+### The zero/small intersection of the observation pattern seem to be invoked by user index 31, hence we consider user 31 as a "bad user" and discard the corresponding rows from both W and Y.
+
+bad_users <- c(31)
+
+Y_train <- Y_train[-bad_users,]
+W_train <- W_train[-bad_users,]
+Q <- Q[-bad_users, -bad_users]
+
+# Reshape the train and test panel sizes
+N <- nrow(Y_train)
+
+### PCA & estimate the factors
+### CALCULATE Sigma_tilde
+
+Sigma_hat <- matrix(nrow = N, ncol = N)
+
+for(i in 1:N){
+  for(j in 1:N){
+    run_ind <- Q[[i, j]]
+    Sigma_hat[i, j] <- sum(Y_train[i, run_ind] * Y_train[j, run_ind])/length(run_ind)
+  }
+}
+
+Sigma_eigen <- prcomp(Sigma_hat/N, scale. = TRUE)
+# x = 100 * cumsum(Sigma_eigen$sdev^2)/sum(Sigma_eigen$sdev^2)
+# plot(x, type = 'b', col = 'red')
+
+r = 4
+
+L_est <- sqrt(N) * Sigma_eigen$rotation[,c(1:r)]
+F_est <- array(0, dim = c(length(TT_train), r))
+
+for(t in 1:length(TT_train)){
+  WLL <- matrix(0, nrow = r, ncol = r)
+  WLY <- numeric(r)
+  for(i in 1:N){
+    if(W_train[i,t] == 1){
+      Li <- t(as.matrix(L_est[i,,drop = F]))
+      WLL <- WLL + Li %*% t(Li) 
+      WLY <- WLY + Y_train[i,t] * Li
+    }
+  }
+  F_est[t,] <- solve(WLL) %*% WLY
+}
+
+u <- which(seq_along(1:nrow(F_est)) %% 2 != 0) 
+f4 <- F_est[u, ]
+f4_test <- f4[nrow(f4), ]
+f4 <- f4[-nrow(f4), ]
+
+f5 <- F_est[-u, ]
+
+data_cor <- data.frame(
+  F4 = f4[, 1],
+  F5 = f5[, 1]
+)
+cor_value <- round(cor(data_cor$F4, data_cor$F5), 2)
+ggplot(data_cor, aes(x = F4, y = F5)) +
+  geom_point(color = "green4", size = 3) + 
+  labs(
+    x = expression(hat(F)[slot == 4 * "," ~ 1]),
+    y = expression(hat(F)[slot == 5 * "," ~ 1]),
+    title = bquote("Subsetted factors, " ~ 
+                     Cor(hat(F)[slot == 4 * "," ~ 1],
+                         hat(F)[slot == 5 * "," ~ 1]) ~ "=" ~ .(cor_value))
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 12),  
+    plot.title = element_text(size = 15, hjust = 0.5),
+    axis.title = element_text(size = 14)
+  )
+
+A_45 = (t(f5) %*% f4) %*% solve(t(f4) %*% f4)
+
+Y_test <- Y_test[-bad_users]
+Y_for <- as.vector(L_est %*% (A_45 %*% f4_test)) 
+
+### Calculate the forecast error with MSSA
+Y_train_ms <- as.matrix(Y_train)
+rownames(Y_train_ms) = colnames(Y_train_ms) = NULL
+Y_for_ms <- vector(length = N)
+for(i in 1:N){
+  Y_for_ms[i] = forecast.mssa(t(Y_train_ms), for_ind = i, t_start = nrow(Y_train))
+}
+
+
+# Only predict non-zero entries
+z = which(Y_test == 0)
+
+u = (Y_for[z] - Y_test[z])^2
+v = (Y_for_ms[z] - Y_test[z])^2
+
+w = (Y_for[-z] - Y_test[-z])^2/(Y_test[-z])^2
+a = (Y_for_ms[-z] - Y_test[-z])^2/(Y_test[-z])^2
+
+pca_reg_z <- c(round(mean(u, na.rm = TRUE), 2),
+               round(sd(u, na.rm = TRUE), 2),
+               round(median(u, na.rm = TRUE), 2))
+
+ms_z <- c(round(mean(v, na.rm = TRUE), 2),
+              round(sd(v, na.rm = TRUE), 2),
+              round(median(v, na.rm = TRUE), 2))
+
+pca_reg_nz <- c(round(100 * mean(w, na.rm = TRUE), 2),
+                round(100 * sd(w, na.rm = TRUE), 2),
+                round(100 * median(w, na.rm = TRUE), 2))
+
+ms_nz <- c(round(100 * mean(a, na.rm = TRUE), 2),
+               round(100 * sd(a, na.rm = TRUE), 2),
+               round(100 * median(a, na.rm = TRUE), 2))
+sse_pca_reg = sum((Y_for - Y_test)^2, na.rm = T)
+sse_ms = sum((Y_for_ms - Y_test)^2, na.rm = T)
+
+tab4 <- cbind(rbind(pca_reg_nz, ms_nz), 
+              rbind(pca_reg_z, ms_z),
+              rbind(sse_pca_reg, sse_ms))
+tab4 <- as.data.frame(tab4)
+rownames(tab4) <- c("pca_reg", "ms")
+colnames(tab4) <- c("mean_nz", "sd_nz", "med_nz",
+                    "mean_z", "sd_z", "med_z", "sse")
+
+
+##########################################################
+### Scatterplot of predicted and test outcomes for treated users
+# `Y_test` and `Y_for` are numeric vectors, and `n_users` is the number of unique users.
+
+# Create a data frame for plotting
+data_test <- data.frame(
+  User = seq_along(Y_test),  # User indices
+  Outcome = Y_test,
+  Group = "Test data"  # Label for legend
+)
+# Create a separate data frame for the points in Y_for
+data_for <- data.frame(
+  User = seq_along(Y_for),  # User indices
+  Outcome = Y_for,
+  Group = "PCA-Reg-sub"  # Label for legend
+)
+
+data_for_mssa <- data.frame(
+  User = seq_along(Y_for_ms),  # User indices
+  Outcome = Y_for_ms,
+  Group = "mSSA-sub"  # Label for legend
+)
+
+# Combine the datasets
+combined_data <- rbind(data_test, data_for, data_for_mssa)
+# Plot using ggplot2
+scatter_45_2 <- ggplot(combined_data, aes(x = User, y = Outcome, color = Group)) +
+  geom_vline(xintercept = 1:n_users, linetype = "dashed", color = "skyblue") +  # Vertical lines
+  geom_point(aes(shape = Group), size = 3) +  # Points for both Y_test and Y_for
+  scale_color_manual(
+    values = c("Test data" = "darkorange", 
+               "PCA-Reg-sub" = "forestgreen",
+               "mSSA-sub" = "blue2")  # Custom colors
+  ) +
+  scale_y_continuous(limits = range(Y_test, na.rm = TRUE)) +  # Match ylim
+  labs(
+    title = "1-step Forecast at t = 204 (slot 5)",
+    x = "User",
+    y = "log-Steps",
+    color = "",  # Legend title
+    shape = ""   # Shape legend title
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14),  # Center title and increase size
+    axis.title.x = element_text(size = 12),  # Increase x-axis label size
+    axis.title.y = element_text(size = 12),  # Increase y-axis label size
+    legend.title = element_text(size = 12),  # Increase legend title size
+    legend.text = element_text(size = 10)    # Increase legend text size
+  )
+
+
+
+### Histogram code
+# Zero entries
+data <- data.frame(
+  value = c(
+    Y_for[z] - Y_test[z], 
+    Y_for_ms[z] - Y_test[z]),
+  group = factor(c(rep("PCA-Reg-sub", length(z)), 
+                   rep("mSSA-sub", length(z))))
+)
+
+hist_45_z_2 <- ggplot(data, aes(x = value, fill = group)) +
+  geom_histogram(position = "identity", alpha = 0.5, bins = 8, color = 'black') +
+  scale_fill_manual(values = c("blue", "red")) +  # Custom colors for groups
+  ggtitle("t = 204 (slot 5), Y = 0") +
+  theme(
+    plot.title = element_text(hjust = 0.5),  # Center the title
+    legend.title = element_blank()           # Remove legend title
+  ) +
+  labs(x = expression(hat(Y) - Y), y = "Frequency")  # Axis labels
+
+# Non-zero entries
+
+data <- data.frame(
+  value = c(
+    Y_for[-z] - Y_test[-z], 
+    Y_for_ms[-z] - Y_test[-z]),
+  group = factor(c(rep("PCA-Reg-sub", length(Y_for) - length(z)), 
+                   rep("mSSA-sub", length(Y_for) - length(z))))
+)
+
+hist_45_nz_2 <- ggplot(data, aes(x = value, fill = group)) +
+  geom_histogram(position = "identity", alpha = 0.5, bins = 8, color = 'black') +
+  scale_fill_manual(values = c("blue", "red")) +  # Custom colors for groups
+  ggtitle("t = 204 (slot 5), Y > 0") +
+  theme(
+    plot.title = element_text(hjust = 0.5),  # Center the title
+    legend.title = element_blank()           # Remove legend title
+  ) +
+  labs(x = expression(hat(Y) - Y), y = "Frequency")  # Axis labels
+

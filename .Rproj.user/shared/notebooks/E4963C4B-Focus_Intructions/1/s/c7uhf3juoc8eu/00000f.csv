@@ -1,0 +1,4 @@
+"0","source(""scatter_plot_fixed_N_T.R"") "
+"1","  |                                                        "
+"1","  |                                                  |   0%"
+"0","gridExtra::grid.arrange(plt1, plt2, ncol = 2)"

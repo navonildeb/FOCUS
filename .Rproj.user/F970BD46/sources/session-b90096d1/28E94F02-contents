@@ -1,0 +1,154 @@
+y1 <- log2(mean_focus_h1[1,])
+y2 <- log2(mean_ms_h1[1,])
+
+x <- 5:9
+
+df <- data.frame(
+  logT = rep(x, 2),
+  logErr = c(y1, y2),
+  Method = factor(rep(c("Focus", "mSSA"), each = 5))
+)
+
+# Get x & y-axis breaks
+x_ticks <- x
+y_ticks <- seq(floor(min(df$logErr)), ceiling(max(df$logErr)), 2)
+
+# Step 1: Extract slopes
+mod_focus <- lm(y1 ~ x)
+mod_ms <- lm(y2 ~ x)
+
+slope_pca <- coef(mod_focus)["x"]
+slope_ms <- coef(mod_ms)["x"]
+
+df$Method <- factor(df$Method, levels = c("Focus", "mSSA"))
+
+legend_labels <- list(
+  bquote("Focus:" ~ T* " "^.(round(slope_pca, 2))),
+  bquote("mSSA:" ~ T* " "^.(round(slope_ms, 2)))
+)
+# Step 5: Plot
+ggplot(df, aes(x = logT, y = logErr, color = Method, shape = Method)) +
+  geom_point(size = 5) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed", linewidth = 1.5) +
+  scale_x_continuous(
+    name = "T",
+    breaks = x,
+    labels = parse(text = paste0("2^", x))
+  ) +
+  scale_y_continuous(
+    name = "Absolute Forecast Error",
+    breaks = y_ticks,
+    labels = parse(text = y_ticks)
+  ) +
+  scale_color_manual(
+    values = c("Focus" = "blue3", "mSSA" = "red3"),
+    labels = legend_labels
+  ) +
+  scale_shape_manual(
+    values = c("Focus" = 16, "mSSA" = 17),
+    labels = legend_labels
+  ) +
+  labs(
+    title = bquote(N == 2^.(5)),
+    x = "T",
+    y = "Absolute Error"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.title = element_blank(),
+    # legend.position = "top",
+    legend.text = element_text(size = 13),
+    legend.position = c(0.8, 0.5),
+    legend.justification = c(0.5, 0),
+    legend.background = element_rect(fill = "#FFFFFF88", colour = NA),
+    legend.box.background = element_rect(fill = NA, colour = NA),
+    legend.spacing.y = unit(-0.1, "cm"),
+    plot.title = element_text(size = 22, hjust = 0.5),
+    axis.title = element_text(size = 22),
+    axis.text.x = element_text(size = 22),
+    axis.text.y = element_text(angle = 0, size = 22),
+    axis.line = element_line(color = "black")
+  )
+
+
+
+
+
+
+
+
+######## Should we plot error against N?
+
+y1 <- log2(mean_focus_h1[,1])
+y2 <- log2(mean_ms_h1[,1])
+
+x <- 5:9
+
+df <- data.frame(
+  logN = rep(x, 2),
+  logErr = c(y1, y2),
+  Method = factor(rep(c("Focus", "mSSA"), each = 5))
+)
+
+# Get x & y-axis breaks
+x_ticks <- x
+y_ticks <- seq(floor(min(df$logErr)), ceiling(max(df$logErr)), 2)
+
+# Step 1: Extract slopes
+mod_focus <- lm(y1 ~ x)
+mod_ms <- lm(y2 ~ x)
+
+slope_pca <- coef(mod_focus)["x"]
+slope_ms <- coef(mod_ms)["x"]
+
+df$Method <- factor(df$Method, levels = c("Focus", "mSSA"))
+
+legend_labels <- list(
+  bquote("Focus:" ~ N* " "^.(round(slope_pca, 2))),
+  bquote("mSSA:" ~ N* " "^.(round(slope_ms, 2)))
+)
+# Step 5: Plot
+ggplot(df, aes(x = logN, y = logErr, color = Method, shape = Method)) +
+  geom_point(size = 5) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed", linewidth = 1.5) +
+  scale_x_continuous(
+    name = "N",
+    breaks = x,
+    labels = parse(text = paste0("2^", x))
+  ) +
+  scale_y_continuous(
+    name = "Absolute Forecast Error",
+    breaks = y_ticks,
+    labels = parse(text = y_ticks)
+  ) +
+  scale_color_manual(
+    values = c("Focus" = "blue3", "mSSA" = "red3"),
+    labels = legend_labels
+  ) +
+  scale_shape_manual(
+    values = c("Focus" = 16, "mSSA" = 17),
+    labels = legend_labels
+  ) +
+  labs(
+    title = bquote(N == 2^.(5)),
+    x = "N",
+    y = "Absolute Error"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.title = element_blank(),
+    # legend.position = "top",
+    legend.text = element_text(size = 13),
+    legend.position = c(0.8, 0.5),
+    legend.justification = c(0.5, 0),
+    legend.background = element_rect(fill = "#FFFFFF88", colour = NA),
+    legend.box.background = element_rect(fill = NA, colour = NA),
+    legend.spacing.y = unit(-0.1, "cm"),
+    plot.title = element_text(size = 22, hjust = 0.5),
+    axis.title = element_text(size = 22),
+    axis.text.x = element_text(size = 22),
+    axis.text.y = element_text(angle = 0, size = 22),
+    axis.line = element_line(color = "black")
+  )
+
+

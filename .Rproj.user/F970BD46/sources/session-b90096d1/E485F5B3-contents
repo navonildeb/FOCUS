@@ -1,0 +1,165 @@
+source('library_causalTS.R')
+
+methods <- c("FOCUS", "mSSA", "SyN-BEATS")
+TT_arr <- 2^c(5:8)
+n_ind = 2
+
+for(dgp_ind in c(0:2)){
+for(h in c(1:3)){
+
+
+load(sprintf("data_files/DGP%d/DGP%d_out.RData", dgp_ind, dgp_ind))
+out_dgp <- switch (as.character(dgp_ind),
+                   "0" = out_dgp0,
+                   "1" = out_dgp1,
+                   "2" = out_dgp2
+)
+
+err_focus <- switch(as.character(h),
+                    "1" = out_dgp$rep_focus_h1[n_ind, seq_along(TT_arr), ],
+                    "2" = out_dgp$rep_focus_h2[n_ind, seq_along(TT_arr), ],
+                    "3" = out_dgp$rep_focus_h3[n_ind, seq_along(TT_arr), ]
+)
+
+err_ms <- switch(as.character(h),
+                 "1" = out_dgp$rep_ms_h1[n_ind, seq_along(TT_arr), ],
+                 "2" = out_dgp$rep_ms_h2[n_ind, seq_along(TT_arr), ],
+                 "3" = out_dgp$rep_ms_h3[n_ind, seq_along(TT_arr), ]
+)
+
+load(sprintf("data_files/DGP%d/synout_files/synout_DGP%d.RData", dgp_ind, dgp_ind))
+err_syn <- switch(as.character(h),
+                  "1" = syn_errors_final$rep_syn_h1,
+                  "2" = syn_errors_final$rep_syn_h2,
+                  "3" = syn_errors_final$rep_syn_h3
+)
+
+
+
+## function to reshape one matrix
+reshape_err <- function(err_mat, method_name) {
+  as.data.frame(err_mat) %>%
+    mutate(TT = TT_arr) %>%
+    pivot_longer(-TT, names_to = "rep", values_to = "err") %>%
+    mutate(
+      rep = as.integer(gsub("V", "", rep)),
+      method = method_name,
+      `logT` = log2(TT),
+      `logerr` = log2(err)
+    ) %>%
+    select(method, `logT`, rep, `logerr`)
+}
+
+## reshape error data matrices
+df_focus <- reshape_err(err_focus, "FOCUS")
+df_mssa  <- reshape_err(err_ms,  "mSSA")
+df_syn   <- reshape_err(err_syn,   "SyNBEATS")
+df_all <- bind_rows(df_focus, df_mssa, df_syn)
+
+#--- Fit LM models and extract slopes
+lm_fits <- df_all %>%
+  group_by(method) %>%
+  do(model = lm(logerr ~ logT, data = .)) %>%
+  mutate(slope = coef(model)[["logT"]]) %>%
+  select(method, slope)
+
+# Build math-style legend labels
+legend_labels <- setNames(
+  lapply(seq_len(nrow(lm_fits)), function(i) {
+    slope <- round(lm_fits$slope[i], 2)
+    method <- lm_fits$method[i]
+    if (method == "FOCUS") {
+      bquote("FOCUS:" ~ T^{phantom(0) * .(slope)})
+    } else if (method == "mSSA") {
+      bquote("mSSA:" ~ T^{phantom(0) * .(slope)})
+    } else {
+      bquote("SyNBEATS:" ~ T^{phantom(0) * .(slope)})
+    }
+  }),
+  lm_fits$method
+)
+
+#--- Summary stats for plotting (mean ± sd)
+df_summary <- df_all %>%
+  group_by(method, logT) %>%
+  summarise(
+    mean_logerr = mean(logerr),
+    sd_logerr = sd(logerr),
+    .groups = "drop"
+  )
+
+#--- Custom style
+method_colors <- c(
+  "mSSA"     = "#D55E00",  # redder
+  "FOCUS"    = "#0072B2",  # blue
+  "SyNBEATS" = "#009E73"   # green/teal
+)
+method_shapes <- c("mSSA" = 16, "FOCUS" = 17, "SyNBEATS" = 18)  # triangle, circle, square
+method_lty    <- c("mSSA" = 2, "FOCUS" = 1, "SyNBEATS" = 3)     # dashed, solid, dotted
+
+#--- y-axis ticks as clean integer powers of 2
+y_min <- floor(min(df_all$logerr))
+y_max <- ceiling(max(df_all$logerr))
+y_breaks <- seq(y_min, y_max, by = 2)
+
+#--- Plot
+#--- Softer colors (Okabe-Ito subset, colorblind-friendly & reviewer-friendly)
+
+
+# enforce order
+df_all$method     <- factor(df_all$method, levels = c("mSSA", "SyNBEATS", "FOCUS"))
+df_summary$method <- factor(df_summary$method, levels = c("mSSA", "SyNBEATS", "FOCUS"))
+lm_fits$method    <- factor(lm_fits$method, levels = c("mSSA", "SyNBEATS", "FOCUS"))
+
+plt <- ggplot(df_summary, aes(x = logT, y = mean_logerr, color = method, shape = method)) +
+  geom_errorbar(
+    aes(ymin = mean_logerr - sd_logerr, ymax = mean_logerr + sd_logerr),
+    width = 0.1, linewidth = 0.9, alpha = 0.5
+  ) +
+  geom_point(size = 5, fill = "white", alpha = 0.7) +
+  geom_smooth(
+    data = df_all,
+    aes(x = logT, y = logerr, linetype = method, color = method),
+    method = "lm", se = FALSE, linewidth = 0.8, alpha = 1, show.legend = FALSE
+  ) +
+  scale_color_manual(values = method_colors, labels = legend_labels) +
+  scale_shape_manual(values = method_shapes, labels = legend_labels) +
+  scale_linetype_manual(values = method_lty, labels = legend_labels) +
+  scale_x_continuous(
+    breaks = log2(c(32, 64, 128, 256)),
+    labels = as.expression(c(expression(2^5), expression(2^6), expression(2^7), expression(2^8)))
+  ) +
+  scale_y_continuous(
+    breaks = y_breaks,
+    labels = as.expression(sapply(y_breaks, function(val) bquote(2^{.(val)})))
+  ) +
+  labs(
+    x = expression(T),
+    y = "Mean Sq. Forecast Error",
+    title = sprintf("DGP-%d, h = %d", dgp_ind + 1, h)
+  ) +
+  theme_minimal(base_size = 16) +
+  theme(
+    legend.title = element_blank(),
+    legend.position = c(0.05, 0.25),
+    legend.justification = c(0, 1),
+    legend.text = element_text(size = 16),
+    legend.background = element_rect(fill = scales::alpha("white", 0.3), color = NA),
+    legend.box.background = element_blank(),
+    axis.title.x = element_text(size = 20, face = "plain"),
+    axis.title.y = element_text(size = 20, face = "plain"),
+    axis.text = element_text(size = 20),
+    plot.title = element_text(hjust = 0.5, size = 24, face = "plain"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(color = "gray85", linewidth = 0.3),
+    axis.line = element_line(color = "black"),
+    axis.line.y.right = element_blank(),
+    axis.line.x.top   = element_blank()
+  )
+
+plt_name <- sprintf("aistats_out/error_plots_vs_T/DGP%d_h%d.pdf", dgp_ind, h)
+ggsave(plt_name, plot = plt, width = 6, height = 6)
+
+}
+}
+

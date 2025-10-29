@@ -1,0 +1,350 @@
+source('library_causalTS.R')
+library(ggplot2)
+library(glmnet)
+library(tseries)
+library(forecast)
+library(astsa)
+
+users_data <- read_csv("HeartSteps_Experiments/HeartStepsV1-main/data_files/users.csv")
+# selected_users <- which(users_data$screentime == 1)
+
+TT <- 100
+W <- as.matrix(W_full[, 2:(TT+1)])
+Y <- as.matrix(Y_full[, 2:(TT+1)])
+
+# plot(Y[4,seq(1, TT, by = 5)], Y[4,seq(2, TT, by = 5)])
+
+TT_4 <- seq(3, TT, by = 5)
+TT_5 <- seq(4, TT, by = 5)
+TT_45 <- sort(c(TT_4, TT_5))
+
+# boxplot(rowSums(Y[,TT_4] == 0, na.rm = TRUE) ~ users_data$screentime)
+
+TT_pos_train <- TT_45[-length(TT_45)]
+TT_pos_test <- TT_45[length(TT_45)]
+
+
+Y_train <- Y[,TT_pos_train]
+Y_test <- Y[,TT_pos_test]
+TT_train <- length(TT_pos_train)
+TT_test <- TT_train + 1
+N <- nrow(Y_train)
+
+# selected_users <- which(rowSums(Y_train == 0, na.rm = TRUE) <= 20)
+# Y_train <- Y_train[selected_users, ]
+# Y_test <- Y_test[selected_users]
+
+
+W_train <- (W[, TT_pos_train]) + 0
+rowMeans(W_train, na.rm = TRUE)
+W_train[which(is.na(Y_train), arr.ind = TRUE)] <- NA
+
+
+Q <- matrix(list(), nrow = N, ncol = N)
+
+for(i in 1:N){
+  for(j in 1:N){
+    Q[[i, j]] <- as.vector(which(W_train[i,] == 1 & W_train[j,] == 1))
+  }
+}
+
+length_Q <- matrix(sapply(Q, length), nrow = nrow(Q), ncol = ncol(Q))
+
+which(length_Q == 0, arr.ind = TRUE)
+
+bad_users <- c(15, 31)
+
+Y_train <- Y_train[-bad_users,]
+Y_test <- Y_test[-bad_users]
+W_train <- W_train[-bad_users,]
+Q <- Q[-bad_users, -bad_users]
+
+# Reshape the train and test panel sizes
+N <- nrow(Y_train)
+
+### PCA & estimate the factors
+
+Sigma_hat <- matrix(nrow = N, ncol = N)
+
+for(i in 1:N){
+  for(j in 1:N){
+    run_ind <- Q[[i, j]]
+    Sigma_hat[i, j] <- sum(Y_train[i, run_ind] * Y_train[j, run_ind])/length(run_ind)
+  }
+}
+
+
+Sigma_eigen <- prcomp(Sigma_hat / N, scale. = TRUE)
+# x = 100 * cumsum(Sigma_eigen$sdev^2)/sum(Sigma_eigen$sdev^2)
+# plot(x, type = 'b', col = 'red')
+
+r = 5
+
+L_est <- sqrt(N) * Sigma_eigen$rotation[,c(1:r)]
+F_est <- array(0, dim = c(TT_train, r))
+
+for(t in 1:TT_train){
+  WLL <- matrix(0, nrow = r, ncol = r)
+  WLY <- numeric(r)
+  for(i in 1:N){
+    if(!is.na(W_train[i,t])){
+      Li <- t(as.matrix(L_est[i,,drop = F]))
+      WLL <- WLL + Li %*% t(Li) * W_train[i,t]
+      WLY <- WLY + Y_train[i,t] * Li * W_train[i,t]
+    }
+  }
+  F_est[t,] <- solve(WLL) %*% WLY
+}
+
+
+
+
+
+
+
+u <- which(seq_along(1:nrow(F_est)) %% 2 != 0) 
+f4 <- F_est[u, ]
+f4_test <- f4[nrow(f4), ]
+f4 <- f4[-nrow(f4), ]
+f5 <- F_est[-u, ]
+
+data_cor <- data.frame(
+  F4 = f4[, 1],
+  F5 = f5[, 1]
+)
+cor_value <- round(cor(data_cor$F4, data_cor$F5), 2)
+ggplot(data_cor, aes(x = F4, y = F5)) +
+  geom_point(color = "green4", size = 3) + 
+  labs(
+    x = expression(hat(F)[slot == 4 * "," ~ 1]),
+    y = expression(hat(F)[slot == 5 * "," ~ 1]),
+    title = bquote("Subsetted panel, " ~ 
+                     Cor(hat(F)[slot == 4 * "," ~ 1],
+                         hat(F)[slot == 5 * "," ~ 1]) ~ "=" ~ .(cor_value))
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 12),  
+    plot.title = element_text(size = 15, hjust = 0.5),
+    axis.title = element_text(size = 14)
+  )
+
+
+A_45 = (t(f5) %*% f4) %*% solve(t(f4) %*% f4)
+
+Y_for <- as.vector(L_est %*% (A_45 %*% f4_test)) 
+
+Y_train_ms <- as.matrix(Y_train)
+rownames(Y_train_ms) = colnames(Y_train_ms) = NULL
+Y_for_ms <- vector(length = N)
+for(i in 1:N){
+  Y_for_ms[i] = forecast.mssa(t(Y_train_ms), for_ind = i, t_start = nrow(Y_train))
+}
+
+
+z = which(Y_test == 0)
+nz = intersect(which(Y_test > 0), which(!is.na(Y_test)))
+
+u = (Y_for[z] - Y_test[z])^2
+v = (Y_for_ms[z] - Y_test[z])^2
+
+w = (Y_for[nz] - Y_test[nz])^2/(Y_test[nz])^2
+a = (Y_for_ms[nz] - Y_test[nz])^2/(Y_test[nz])^2
+
+
+
+
+
+pch_arr <- ifelse(Y_test==0, 13, 16)
+par(mar = rep(5,4))
+plot(Y_test, col = 'red', pch = pch_arr, ylim = range(Y_test, na.rm = TRUE),
+     xlab = "User", ylab = "Outcome", main = "Forecast at t = 210", cex = 1.5,
+     cex.main = 2, cex.lab = 2)
+abline(v = 1:N, lty = 2, col = 'skyblue')
+points(Y_for, col = 'blue', pch = pch_arr, cex = 1.5)
+points(Y_for_ms, col = 'green3', pch = pch_arr, cex = 1.5)
+
+legend("topright",
+       legend = c("Test", "PCA-Reg", "mSSA"),
+       y.intersp = 1.5,
+       col = c("red", "blue", "green3"),
+       pch = 16, cex = 1.5,
+       bg = rgb(1, 1, 1, alpha = 0.5))
+
+
+
+
+
+################################################################################################
+################################################################################################
+################################################################################################
+
+
+# selected_users <- which(users_data$age < 30)
+selected_users <- c(1:37)
+TT <- 200
+
+W <- as.matrix(W_full[selected_users, 0 + (1:TT)])
+Y <- as.matrix(Y_full[selected_users, 0 + (1:TT)])
+
+TT_test <- TT
+TT_train <- TT_test - 1
+
+
+Y_train = Y[, 1:TT_train]
+Y_test = Y[, TT_test]
+
+W_train = W[, 1:TT_train] + 0
+W_test = W[, TT_test]
+
+
+W_train[is.na(W_train)] <- 0 
+W_train[is.na(Y_train)] <- 0
+W_test[is.na(W_test)] <- 0
+W_test[is.na(Y_test)] <- 0
+
+### Calculate the common treatment points, follow XP'23.
+
+N <- nrow(Y_train)
+Q <- matrix(list(), nrow = N, ncol = N)
+
+for(i in 1:N){
+  for(j in 1:N){
+    Q[[i, j]] <- as.vector(which(W_train[i,] == 1 & W_train[j,] == 1))
+  }
+}
+
+length_Q <- matrix(sapply(Q, length), nrow = nrow(Q), ncol = ncol(Q))
+which(length_Q <= 1, arr.ind = TRUE)
+
+### The zero/small intersection of the observation pattern seem to be invoked by user index 31, hence we consider user 31 as a "bad user" and discard the corresponding rows from both W and Y.
+
+bad_users <- c(31)
+
+Y_train <- Y_train[-bad_users,]
+Y_test <- Y_test[-bad_users]
+
+W_train <- W_train[-bad_users,]
+W_test <- W_test[-bad_users]
+Q <- Q[-bad_users, -bad_users]
+
+# Reshape the train and test panel sizes
+N <- nrow(Y_train)
+
+### PCA & estimate the factors
+
+# CALCULATE Sigma_hat
+
+Sigma_hat <- matrix(nrow = N, ncol = N)
+
+for(i in 1:N){
+  for(j in 1:N){
+    run_ind <- Q[[i, j]]
+    Sigma_hat[i, j] <- sum(Y_train[i, run_ind] * Y_train[j, run_ind])/length(run_ind)
+  }
+}
+
+Sigma_eigen <- prcomp(Sigma_hat/N, scale. = TRUE)
+x = 100 * cumsum(Sigma_eigen$sdev^2)/sum(Sigma_eigen$sdev^2)
+# plot(x, type = 'b', col = 'red')
+
+### ad-hoc choice of 70% variance explanation
+# r = which(x >= 75)[1]
+r = 7
+# r = 3 gives smallest sse
+
+L_est <- sqrt(N) * Sigma_eigen$rotation[,c(1:r)]
+
+F_est <- array(0, dim = c(TT_train, r))
+
+for(t in 1:TT_train){
+  WLL <- matrix(0, nrow = r, ncol = r)
+  WLY <- numeric(r)
+  for(i in 1:N){
+    if(W_train[i,t] == 1){
+      Li <- t(as.matrix(L_est[i,,drop = F]))
+      WLL <- WLL + Li %*% t(Li) 
+      WLY <- WLY + Y_train[i,t] * Li
+    }
+  }
+  
+  if(any(eigen(WLL)$values < 10^-10)){
+    WLL <- WLL + 10^-6 * diag(ncol(WLL))
+  }
+  
+  F_est[t,] <- solve(WLL) %*% WLY
+}
+
+# Current goal is to forecast slot 4  ---> slot 5
+F1 = F_est[c(seq(1, TT_train, by = 5)),]
+F2 = F_est[c(seq(2, TT_train, by = 5)),]
+F3 = F_est[c(seq(3, TT_train, by = 5)),]
+F4 = F_est[c(seq(4, TT_train, by = 5)),]
+F5 = F_est[c(seq(5, TT_train, by = 5)),]
+
+
+F4_train = F4[-nrow(F4),]
+F4_test = F4[nrow(F4),]
+
+F5_train = F5
+
+data_cor <- data.frame(
+  F4 = F4_train[,1],
+  F5 = F5_train[,1]
+)
+cor_value <- round(cor(data_cor$F4, data_cor$F5), 2)
+ggplot(data_cor, aes(x = F4, y = F5)) +
+  geom_point(color = "green3", size = 4, alpha = 0.7) + 
+  labs(
+    x = expression(hat(F)[1]^{(4)}),
+    y = expression(hat(F)[1]^{(5)}),
+    title = bquote("T = "~ .(TT) ~ ", Corr" ~ "=" ~ .(cor_value))
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 20),  
+    plot.title = element_text(size = 24, hjust = 0.5),
+    axis.title = element_text(size = 20),
+    axis.text = element_text(size = 20),
+    axis.line = element_line(color = "black"),
+  )
+
+
+A_45 = t(F5_train) %*% F4_train %*% solve(t(F4_train) %*% F4_train)
+
+Y_for <- as.vector(L_est %*% (A_45 %*% F4_test)) 
+
+
+
+Y_train_ms <- as.matrix(Y_train)
+rownames(Y_train_ms) = colnames(Y_train_ms) = NULL
+Y_for_ms <- vector(length = N)
+for(i in 1:N){
+  Y_for_ms[i] = forecast.mssa(t(Y_train_ms), for_ind = i, t_start = nrow(Y_train))
+}
+
+
+z = intersect(which(Y_test == 0), which(W_test==1))
+nz = intersect(which(Y_test > 0), which(W_test==1))
+
+SS_z_focus <- (Y_for[z] - Y_test[z])^2; SS_nz_focus = (Y_for[nz] - Y_test[nz])^2/(Y_test[nz])^2
+SS_z_ms <- (Y_for_ms[z] - Y_test[z])^2; SS_nz_ms <- (Y_for_ms[nz] - Y_test[nz])^2/(Y_test[nz])^2
+print(round(c("FOCUS" = sum(SS_nz_focus), "mSSA" = sum(SS_nz_ms)), 3))
+
+
+
+
+
+###### Plot of relative forecaste errors for HeartSteps
+## Construct the arrays for T = 100, 110, ..., 200
+TT_arr <- seq(100, 200, 10)
+SS_focus_arr = SS_ms_arr = numeric(length(TT_arr))
+### Update the following lines to update the comparison arays
+t_ind <- which(TT_arr == TT)
+SS_focus_arr[t_ind] <- sum(SS_nz_focus)
+SS_ms_arr[t_ind] <- sum(SS_nz_ms)
+
+### Now plot the relative errors with the benchmark
+plot(TT_arr, w_arr - a_arr, 
+     type = 'b', col = 'blue', pch = 15, cex = 1.25,
+     xlab = "T", ylab = expression("Diff of relative errors"), main = "FOCUS - mSSA", cex.lab = 1.5, cex.main = 1.5)

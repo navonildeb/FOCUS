@@ -1,0 +1,97 @@
+library(ggplot2)
+
+plot(1, type = 'n',
+     xlim = c(1,37),
+     ylim = range(c(Y_test[nz], Y_for[nz], Y_for_ms[nz]), na.rm = TRUE),
+     xlab = "User",
+     ylab = "Outcome",
+     main = "Forecast for T = 200")
+
+abline(v = nz, lty = 2, col = 'skyblue')
+
+points(nz, Y_test[nz], col = 'red')
+
+points(nz, Y_for[nz], col = 'blue')
+
+points(nz, Y_for_ms[nz], col = 'green4')
+
+legend("topleft", 
+       legend = c("Test", "FoCuS", "mSSA"), 
+       col = c('red', 'blue', 'green4'), 
+       pch = 1,
+       bty = 'n')
+
+
+
+
+
+
+df <- data.frame(
+  User = rep(nz, 3),
+  Outcome = c(Y_test[nz], Y_for[nz], Y_for_ms[nz]),
+  Method = rep(c("Test", "FoCuS", "mSSA"), each = length(nz))
+)
+df$Method <- factor(df$Method, levels = c("Test", "mSSA", "FoCuS"))
+
+ggplot(df, aes(x = User, y = Outcome, color = Method, shape = Method)) +
+  geom_vline(xintercept = nz, linetype = "dashed", color = "skyblue", linewidth = 0.7) +
+  geom_point(size = 4, alpha = 0.7) +
+  labs(title = "T = 190", x = "User", y = "Outcome") +
+  scale_x_continuous(
+    breaks = 1:36,
+    labels = ifelse(1:36 %in% nz, 1:36, "")
+  ) +
+  scale_color_manual(values = c("Test" = "green3", "mSSA" = "red3", "FoCuS" = "blue3")) +
+  scale_shape_manual(values = c("Test" = 15, "mSSA" = 17, "FoCuS" = 16)) +
+  theme_minimal() +
+  theme(
+    legend.title = element_blank(),
+    legend.text = element_text(size = 15),
+    legend.position = c(0.15, 0.2),
+    legend.background = element_rect(fill = "#FFFFFF88", colour = NA),
+    legend.box.background = element_rect(fill = NA, colour = NA),
+    legend.spacing.y = unit(-0.1, "cm"),
+    text = element_text(size = 15),  
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title = element_text(size = 20),
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 20),
+    axis.line = element_line(color = "black")
+  )
+
+
+
+
+
+
+
+
+
+
+
+
+
+df <- data.frame(
+  T = c(100, 200, 400, 800),
+  error_mean = c(0.5, 0.3, 0.2, 0.1),
+  error_sd = c(0.4, 0.2, 0.1, 0.05),
+  method = rep("Method A", 4)
+)
+df$ymin <- pmax(df$error_mean - df$error_sd, .Machine$double.eps)
+df$ymax <- df$error_mean + df$error_sd
+library(ggplot2)
+
+ggplot(df, aes(x = T, y = error_mean, color = method)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = ymin, ymax = ymax), width = 0.1) +
+  scale_x_log10(breaks = df$T) +
+  scale_y_log10() +
+  labs(
+    x = expression(log[10](T)),
+    y = expression(log[10]~Error),
+    title = "Error with Log-Log Scale and Error Bars"
+  ) +
+  theme_minimal() +
+  theme(text = element_text(size = 14))
+
+

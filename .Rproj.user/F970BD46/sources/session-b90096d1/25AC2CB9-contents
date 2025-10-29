@@ -1,0 +1,327 @@
+source('library_causalTS.R')
+users_data <- read_csv("HeartSteps_Experiments/HeartStepsV1-main/data_files/users.csv")
+### Full set of users
+selected_users <- c(1:37)
+
+### Time points: 100, 110, ..., 200
+TT_arr <- seq(100, 200, 10)
+
+hs_out <- list()
+
+for(t_ind in seq_along(TT_arr)){
+  TT <- TT_arr[t_ind]
+  W <- as.matrix(W_full[selected_users, 0 + (1:TT)])
+  Y <- as.matrix(Y_full[selected_users, 0 + (1:TT)])
+  TT_test <- TT
+  TT_train <- TT_test - 1
+  
+  Y_train = Y[, 1:TT_train]
+  Y_test = Y[, TT_test]
+  W_train = W[, 1:TT_train] + 0
+  W_test = W[, TT_test]
+  
+  W_train[is.na(W_train)] <- 0 
+  W_train[is.na(Y_train)] <- 0
+  W_test[is.na(W_test)] <- 0
+  W_test[is.na(Y_test)] <- 0
+  
+  ### Calculate the common treatment points
+  N <- nrow(Y_train)
+  Q <- matrix(list(), nrow = N, ncol = N)
+  
+  for(i in 1:N){
+    for(j in 1:N){
+      Q[[i, j]] <- as.vector(which(W_train[i,] == 1 & W_train[j,] == 1))
+    }
+  }
+  # length_Q <- matrix(sapply(Q, length), nrow = nrow(Q), ncol = ncol(Q))
+  # which(length_Q <= 1, arr.ind = TRUE)
+  
+  
+  ### The zero/small intersection 
+  ### of the observation pattern seem to be invoked by 
+  ### user index 31, hence we consider user 31 as a "bad user" and 
+  ### discard the corresponding rows from both W and Y.
+  
+  bad_users <- c(31)
+  Y_train <- Y_train[-bad_users,]
+  Y_test <- Y_test[-bad_users]
+  
+  W_train <- W_train[-bad_users,]
+  W_test <- W_test[-bad_users]
+  Q <- Q[-bad_users, -bad_users]
+  
+  ## Reshape the train and test panel sizes
+  N <- nrow(Y_train)
+  ### PCA & estimate the factors
+  ### Calculate Sigma_hat
+  
+  Sigma_hat <- matrix(nrow = N, ncol = N)
+  
+  for(i in 1:N){
+    for(j in 1:N){
+      run_ind <- Q[[i, j]]
+      Sigma_hat[i, j] <- sum(Y_train[i, run_ind] * Y_train[j, run_ind])/length(run_ind)
+    }
+  }
+  
+  Sigma_eigen <- prcomp(Sigma_hat/N, scale. = TRUE)
+  r = 7
+  
+  
+  ### Scree-plot of eigenvalues give a criteria for selecting the rank
+  ### An ad-hoc choice of 75% variance explanation
+  
+  # x = 100 * cumsum(Sigma_eigen$sdev^2)/sum(Sigma_eigen$sdev^2)
+  # plot(x, type = 'b', col = 'red')
+  # r = which(x >= 75)[1]
+  
+  L_est <- sqrt(N) * Sigma_eigen$rotation[,c(1:r)]
+  F_est <- array(0, dim = c(TT_train, r))
+  for(t in 1:TT_train){
+    WLL <- matrix(0, nrow = r, ncol = r)
+    WLY <- numeric(r)
+    for(i in 1:N){
+      if(W_train[i,t] == 1){
+        Li <- t(as.matrix(L_est[i,,drop = F]))
+        WLL <- WLL + Li %*% t(Li) 
+        WLY <- WLY + Y_train[i,t] * Li
+      }
+    }
+    
+    if(any(eigen(WLL)$values < 10^-10)){
+      ### regularize the covariance matrix with a small penalty
+      WLL <- WLL + 10^-6 * diag(ncol(WLL))
+    }
+    
+    F_est[t,] <- solve(WLL) %*% WLY
+  }
+  
+  ### Extract slot 4 --> slot 5 forecasting information
+  F1 = F_est[c(seq(1, TT_train, by = 5)),]
+  F2 = F_est[c(seq(2, TT_train, by = 5)),]
+  F3 = F_est[c(seq(3, TT_train, by = 5)),]
+  F4 = F_est[c(seq(4, TT_train, by = 5)),]
+  F5 = F_est[c(seq(5, TT_train, by = 5)),]
+  
+  F4_train = F4[-nrow(F4),]
+  F4_test = F4[nrow(F4),]
+  F5_train = F5
+  
+  # data_cor <- data.frame(
+  #   F4 = F4_train[,2],
+  #   F5 = F5_train[,1]
+  # )
+  # cor_value <- round(cor(data_cor$F4, data_cor$F5), 2)
+  # scatter_plt <- ggplot(data_cor, aes(x = F4, y = F5)) +
+  #   geom_point(color = "salmon2", size = 4, alpha = 0.8) +
+  #   labs(
+  #     x = expression(hat(F)[2]^{(4)}),
+  #     y = expression(hat(F)[1]^{(5)}),
+  #     title = bquote("T = "~ .(TT) ~ ", Corr" ~ "=" ~ .(cor_value))
+  #   ) +
+  #   theme_minimal(base_size = 16) +
+  #   theme(
+  #     plot.title = element_text(hjust = 0.5, size = 24, face = "plain"),
+  #     axis.title.x = element_text(size = 20, face = "plain"),
+  #     axis.title.y = element_text(size = 20, face = "plain"),
+  #     axis.text.y = element_text(size = 20),
+  #     axis.text.x = element_text(size = 15),
+  #     legend.title = element_blank(),
+  #     legend.position = c(0.75, 0.15),
+  #     legend.justification = c(0, 1),
+  #     legend.text = element_text(size = 13),
+  #     legend.background = element_rect(fill = scales::alpha("white", 0.6), color = NA), # semi-transparent
+  #     panel.grid.minor = element_blank(),
+  #     panel.grid.major = element_line(color = "gray85", linewidth = 0.3),
+  #     axis.line = element_line(color = "black"),
+  #     axis.line.y.right = element_blank(),
+  #     axis.line.x.top   = element_blank()
+  #   )
+  # scatter_plt
+  # plt_name <- sprintf("../AISTATS/AISTATS_out/HeartSteps_results/Crosscorr_T%d.pdf", TT)
+  # ggsave(plt_name, plot = scatter_plt, width = 6, height = 6)
+  
+  ### Forecast the steps with FOCUS
+  A_45 = t(F5_train) %*% F4_train %*% solve(t(F4_train) %*% F4_train)
+  Y_for <- as.vector(L_est %*% (A_45 %*% F4_test)) 
+  
+  
+  ### Forecast the steps with mSSA
+  Y_train_ms <- as.matrix(Y_train)
+  rownames(Y_train_ms) = colnames(Y_train_ms) = NULL
+  Y_for_ms <- vector(length = N)
+  for(i in 1:N){
+    Y_for_ms[i] = forecast.mssa(t(Y_train_ms), for_ind = i, t_start = nrow(Y_train))
+  }
+  
+  ### Indentify the users with zero/positive steps
+  z = intersect(which(Y_test == 0), which(W_test==1))
+  nz = intersect(which(Y_test > 0), which(W_test==1))
+  
+  ### Calculate sum of squares for users with zero/non-zero steps
+  SS_z_focus <- (Y_for[z] - Y_test[z])^2
+  SS_nz_focus = (Y_for[nz] - Y_test[nz])^2
+  # SS_nz_focus = (Y_for[nz] - Y_test[nz])^2/(Y_test[nz])^2
+  MS_nz_focus = SS_nz_focus / length(nz)
+  
+  SS_z_ms <- (Y_for_ms[z] - Y_test[z])^2
+  SS_nz_ms <- (Y_for_ms[nz] - Y_test[nz])^2
+  # SS_nz_ms <- (Y_for_ms[nz] - Y_test[nz])^2/(Y_test[nz])^2
+  MS_nz_ms = SS_nz_ms / length(nz)
+  
+  hs_out[[t_ind]] <- list(z = z, nz = nz,
+                          Y_nz = Y_test[nz],
+                          Y_nz_focus = Y_for[nz],
+                          Y_nz_ms = Y_for_ms[nz],
+                          SS_z_focus = SS_z_focus, 
+                          SS_nz_focus = SS_nz_focus,
+                          MS_nz_focus = MS_nz_focus,
+                          SS_z_ms = SS_z_ms,
+                          SS_nz_ms = SS_nz_ms,
+                          MS_nz_ms = MS_nz_ms)
+}
+
+save(hs_out, file = "HeartSteps_Experiments/HeartStepsV1-main/hs_out.RData")
+
+
+MS_focus_arr = MS_ms_arr = numeric(length(TT_arr))
+for(t_ind in seq_along(TT_arr)){
+  MS_focus_arr[t_ind] <- sum(hs_out[[t_ind]]$MS_nz_focus)
+  MS_ms_arr[t_ind] <- sum(hs_out[[t_ind]]$MS_nz_ms)
+}
+
+plot(TT_arr, MS_focus_arr, ylim = range(MS_focus_arr, MS_ms_arr), col = "#0072B2", cex=1.5)
+points(TT_arr, MS_ms_arr, col = "#D55E00", cex =1.5)
+
+
+###  Plot the relative errors with the benchmark mSSA
+df <- data.frame(
+  TT    = TT_arr,
+  Diff = MS_focus_arr - MS_ms_arr
+)
+
+ggplot(df, aes(x = TT, y = Diff)) +
+  geom_hline(yintercept = 0, color = "red3", linetype = "dashed", linewidth = 1.0) +
+  geom_line(color = "#0072B2", linetype = "solid", linewidth = 1, alpha = 0.4) +
+  geom_point(color = "#0072B2", shape = 15, size = 4) +
+  scale_x_continuous(
+    breaks = seq(100, 200, by = 20),        
+    minor_breaks = seq(100, 200, by = 10)
+  ) +
+  labs(
+    x = "T",
+    y = expression("Diff of MSFE (avg. positive steps)"),
+    title = "FOCUS - mSSA"
+  ) +
+  theme_minimal(base_size = 16) +
+  theme(
+    text = element_text(size = 20),
+    plot.title = element_text(size = 24, hjust = 0.5),
+    axis.title = element_text(size = 20),
+    axis.text = element_text(size = 20),
+    axis.line = element_line(color = "black"),
+    panel.grid.minor.x = element_line(color = "grey85", linewidth = 0.5),
+    panel.grid.major.x = element_line(color = "grey85", linewidth = 0.5),
+    panel.grid.minor.y = element_blank()
+  )
+
+
+# Plot the difference of MSFE among positive step users between FOCUS and mSSA
+
+ggplot(df, aes(x = TT, y = Diff)) +
+  geom_hline(yintercept = 0, color = "red3", linetype = "dashed", linewidth = 1.0) +
+  geom_line(color = "#0072B2", linetype = "solid", linewidth = 1, alpha = 0.5) +
+  geom_point(color = "#0072B2", shape = 15, size = 4) +
+  scale_x_continuous(
+    breaks = seq(100, 200, by = 20),
+    minor_breaks = seq(100, 200, by = 10)
+  ) +
+  scale_y_continuous(
+    limits = c(-20, 5)
+  ) +
+  labs(
+    x = "T",
+    y = expression("Diff of MSPE (Positive Steps)"),
+    title = "FOCUS - mSSA"
+  ) +
+  theme_minimal(base_size = 16) +
+  theme(
+    text = element_text(size = 20),
+    plot.title = element_text(size = 24, hjust = 0.5),
+    axis.title = element_text(size = 20),
+    axis.text = element_text(size = 20),
+    axis.line = element_line(color = "black"),
+    panel.grid.minor.x = element_line(color = "grey85", linewidth = 0.5),
+    panel.grid.major.x = element_line(color = "grey85", linewidth = 0.5),
+    panel.grid.minor.y = element_blank()
+  )
+
+
+### Plot the predicted future outcome for both competing methods and test points
+
+t_ind = 8
+x0 = hs_out[[t_ind]]$Y_nz # Test data point
+x1 = hs_out[[t_ind]]$Y_nz_focus # Prediction of FOCUS
+x2 = hs_out[[t_ind]]$Y_nz_ms # Prediction of 
+
+n <- length(x0)
+df <- data.frame(
+  User = 1:n,
+  diff_x1 = x1 - x0,
+  diff_x2 = x2 - x0
+)
+
+df_long <- df %>%
+  pivot_longer(cols = c(diff_x1, diff_x2),
+               names_to = "Method", values_to = "Error")
+
+# Example: custom names for the x-axis
+custom_labels <- hs_out[[t_ind]]$nz  
+
+ggplot(df_long, aes(x = User, y = Error, color = Method, shape = Method)) +
+  geom_point(size = 5, alpha = 0.8) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray60", linewidth = 1.0) +
+  scale_color_manual(
+    values = c("diff_x2" = "#D55E00", "diff_x1" = "#0072B2"),  # mSSA red, FOCUS blue
+    labels = c("diff_x2" = "mSSA", "diff_x1" = "FOCUS"),
+    breaks = c("diff_x2", "diff_x1")
+  ) +
+  scale_shape_manual(
+    values = c("diff_x2" = 16, "diff_x1" = 17),  # square for mSSA, triangle for FOCUS
+    labels = c("diff_x2" = "mSSA", "diff_x1" = "FOCUS"),
+    breaks = c("diff_x2", "diff_x1")
+  ) +
+  scale_x_continuous(
+    breaks = 1:n,
+    labels = custom_labels
+  ) + 
+  # scale_y_continuous(
+  #   limits = c(-6, 2)
+  # ) +
+  labs(
+    x = "Users with Positive Steps",
+    y = expression("Prediction Error (" * hat(Y) - Y * ")"),
+    title = sprintf("T = %d", TT_arr[t_ind]),
+    color = "Series",
+    shape = "Series"
+  ) +
+  theme_minimal(base_size = 16) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 24, face = "plain"),
+    axis.title.x = element_text(size = 20, face = "plain"),
+    axis.title.y = element_text(size = 20, face = "plain"),
+    axis.text.y = element_text(size = 20),
+    axis.text.x = element_text(size = 15),
+    legend.title = element_blank(),
+    legend.position = c(0.70, 0.20),
+    legend.justification = c(0, 1),
+    legend.text = element_text(size = 16),
+    legend.background = element_rect(fill = scales::alpha("white", 0.6), color = NA), # semi-transparent
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(color = "gray85", linewidth = 0.3),
+    axis.line = element_line(color = "black"),
+    axis.line.y.right = element_blank(),
+    axis.line.x.top   = element_blank()
+  )
+
