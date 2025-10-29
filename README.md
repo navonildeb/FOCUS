@@ -1,6 +1,6 @@
 # Counterfactual Forecasting for Panel Data (FOCUS)
 
-This Github respository maintains the codes and experiments presented in our paper [**"Counterfactual Forecasting for Panel Data"**](https://github.com/navonildeb/navonildeb.github.io/blob/master/files/focus_preprint.pdf)(under review at AISTATS 2026).
+This Github respository maintains the codes and experiments presented in our paper [**"Counterfactual Forecasting for Panel Data"**](https://navonildeb.github.io/files/focus_preprint.pdf)(under review at AISTATS 2026).
  
 ---
 
