@@ -60,7 +60,7 @@ source("HeartSteps_Experiments/HeartSteps_forecast_plot.R")
 
 ## Citation
 If you use this code, please cite:
-> **Deb, Dwivedi, and Basu (2025).** *Counterfactual Forecasting for Panel Data.* (Under review at AISTATS 2026)
+> Deb, N., Dwivedi, R., & Basu, S. (2025). Counterfactual Forecasting For Panel Data. arXiv preprint arXiv:2511.06189.
 
 ---
 
