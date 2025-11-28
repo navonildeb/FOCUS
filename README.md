@@ -8,7 +8,7 @@ This Github respository maintains the codes and experiments presented in our pap
 
 **FOCUS** is a forecasting framework for counterfactual prediction in panel data with temporally correlated latent factors.
 This repository provides implementations of FOCUS alongside benchmark methods (**mSSA** and **SyNBEATS**), simulation scripts, and real-data experiments using the HeartSteps study.
-Comprehensive experimental details and figure reproduction instructions are provided in the reproducibility vignette (`vignette.Rmd`), from which the accompanying `Vignette.pdf` is generated.  
+Comprehensive experimental details and figure reproduction instructions are provided in the reproducibility vignette (`Vignette.Rmd`), from which the accompanying `Vignette.pdf` is generated.  
 To regenerate all results and figures from scratch, set the option  
 `knitr::opts_chunk$set(echo = TRUE, cache = FALSE)`  
 in line 11 of `vignette.Rmd` before knitting.
