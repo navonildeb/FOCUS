@@ -12,7 +12,7 @@ knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
 ```
 
 ## Python installation
-
+This vignette contains the reproducibility instructions for the experiments from the paper <https://arxiv.org/abs/2511.06189>.
 Although the majority of the codes are implemented in `R`, user needs to have Python in the system. For installing any necessary Python packages, user can use `pip` in terminal. Following are some examples: 
 
 ```{bash pip, eval=FALSE}
@@ -41,10 +41,10 @@ We conduct the experiments for \textsc{Focus} and mSSA with R functions in `libr
 
 ### Data generation
 
-The data sets used in the manuscript are generated with `gen_data_DGP<dgp_index>.R` function. `<dgp_ind>` = 0, 1, 2 corresponds to DGP-1, 2, 3 respectively in the manuscript
+The data sets used in the paper are generated with `gen_data_DGP<dgp_index>.R` function. `<dgp_ind>` = 0, 1, 2 corresponds to DGP-1, 2, 3 respectively in the paper. The results of DGP-4 are added later and we denote the corresponding index with `<dgp_ind> = 4`.
 
 ```{r gen_data, eval=FALSE}
-source("gen_data_DGP0.R") # change the index from 0 to 1, 2
+source("R/gen_data_DGP0.R") # change the index from 0 to 1, 2
 ```
 
 The example line generates data sets coming from DGP-1 with $N = 64$ and $T = 32, 64, 128, 256$. For $T = 32$ and `iteration_number`$ = 1,\ldots, 30$, the example outputs are the following triplets--
@@ -60,7 +60,7 @@ The user can set customized options for the DGP parameters inside the in the fun
 ### Forecast outputs
 
 ```{r forecast_exp_focus_mssa, eval=FALSE}
-source("forecast_DGP0.R") # change the index from 0 to 1, 2
+source("R/forecast_DGP0.R") # change the index from 0 to 1, 2
 ```
 
 The example line gives the outputs of \textsc{Focus} for DGP-1. The output file name is `DGP0_out.RData` and the output list `out_dgp0` contains the following array objects (the objects are accessible by `$` operation, e.g. `out_dgp0$<object_name>`):
@@ -77,42 +77,67 @@ For extracting the SyNBEATS outputs, user needs to run the Jupyter notebook `SyN
 
 Open the file `syn_error_preprocess.R`. In line 2, change the `dgp_ind` accordingly, save the file and run the whole file with the following
 ```{r syn_error_process, eval=FALSE}
-source("syn_error_preprocess.R") # change dgp_ind in line 2 from 0 to 1, 2
+source("R/syn_error_preprocess.R") # change dgp_ind in line 2 from 0 to 1, 2
 ```
 
 This command creates and saves a list object called `syn_errors_final` that has attributes `rep_syn_h<horizon>`, a $4 \times 30$ matrix with `horizon` = 1,2,3. The rows correspond to $T = 32, 64, 128, 256$ and the columns represent the replications from 1 to 30. Each $(t,r)$\textsuperscript{th} entry records the MSFE for time $t$ and replication $r$.
 
 
-## Reproducing Figure 1(a)-(d) in the manuscript
+## Reproducing Figure 1(a)-(d) in the paper
 
 Figure 1(a)-(d) capture the average MSFE (with one standard deviation error bars) across 30 trials for \textsc{Focus}, mSSA and SyNBEATS.
 
 ```{r err_plot_vs_T, warning=FALSE, fig.width = 12, fig.height = 6}
-source("err_vs_T_plt.R")
+source("R/err_vs_T_plt.R")
 gridExtra::grid.arrange(plt1, plt2, ncol = 2)
 ```
 
 This line creates the plots of MSFE across competing methods with $T$ in the file 
 
-`aistats_out/DGP<dgp_ind>_h<horizon>.pdf` 
+`figures/error_plots_vs_T/DGP<dgp_ind>_h<horizon>.pdf` 
 
 with `dgp_ind` = 0, 1, 2 and `horizon` = 1, 2, 3. Similarly we recover the Figure 3 (a), (b) and Figure 4 (a), (b), (c) in the Appendix.
 
-## Reproducing Figure 1(e)-(h) in the manuscript
+## Reproducing Figure 1(e-f) in the paper
 
-Figure 1(e)-(h) present the scatterplots of MSFE values for \textsc{Focus} and the competing method (mSSA and SyNBEATS) across 30 trials.
+Figure 1(e-h) present the scatterplots of MSFE values for \textsc{Focus} and the competing method (mSSA and SyNBEATS) across 30 trials.
 
 ```{r scatter_plot, warning=FALSE, fig.width = 12, fig.height = 6}
-source("scatter_plot_fixed_N_T.R") 
+source("R/scatter_plot_fixed_N_T.R") 
 gridExtra::grid.arrange(plt1, plt2, ncol = 2)
 ```
 
 This line creates the scatter plots of MSFE across 30 trials in the file
 
-`aistats_out/scatter_plots/scatter_plot_DGP<dgp_ind>_T<value_of_T>_h<horizon>.pdf` 
+`figures/scatter_plots/scatter_plot_DGP<dgp_ind>_T<value_of_T>_h<horizon>.pdf` 
 
 for `dgp_ind` = 0, 1, 2 `T` = 32, 64, 128, 256, and `horizon` = 1, 2, 3. This line also produces Figure 3(c), (d), and Figure 4(d)-(f) in the Appendix.
 
+## Reproducing Figure 1(g)
+
+For obtaining the runtime comparison as in Fig 1(g) in the paper, the user needs to first run the following:
+```{r rutime, eval=FALSE}
+source("R/forecast_DGP2.R")
+```
+
+The runtime data for FOCUS and mSSA is stored in `out_dgp2$timerep_focus` and `out_dgp2$timerep_focus`. The runtime data of DGP-2 for SyNBEATS is stored in `data_files/DGP4/synout_files/synout_DGP2.RData` and the plots are produced in `figures/runtime_plots_vs_T/runtime_DGP<dgp_ind>.pdf` with `dgp_ind = 2,4`. For reproducing Fig 1.(g), the following file should be run:
+
+```{r,warning=FALSE, fig.width = 7, fig.height = 4}
+source("R/runtime_vs_T.R")
+plt_time
+```
+
+Changing the `dgp_ind` from 2 to 4 in the script yields Fig. 9 in the paper.
+
+## Histogram of forecast errors
+
+The histograms of forecast errors 
+
+```{r coverage_histogram_forecast, fig.width = 5, fig.height = 5, cache = TRUE}
+source("R/gen_data_covg.R")
+source("R/histogram_dgp0.R")
+p_hist
+```
 
 ## Reproducing HeartSteps results
 
@@ -120,7 +145,7 @@ Below we provide the details for running experiments with the HeartSteps data se
 
 ### Data cleaning
 
-The data pre-processing is performed by running the following line (details can be found in the manuscript, Appendix section H.1):
+The data pre-processing is performed by running the following line (details can be found in the paper, Appendix section H.1):
 
 ```{r data_preprocessing, message=FALSE, warning=FALSE}
 source("HeartSteps_Experiments/suggestions_clean.R")
@@ -139,7 +164,7 @@ This line creates three main CSV files inside the folder
 
 ### Forecasting with \textsc{Focus} and mSSA
 
-For obtaining the forecast result at time point $T+5$ for the observed panel until time $T$ (Section 5.2 of the manuscript), we run the following:
+For obtaining the forecast result at time point $T+5$ for the observed panel until time $T$ (Section 5.2 of the paper), we run the following:
 
 ```{r heartsteps_results, warning=FALSE, message=FALSE}
 source("HeartSteps_Experiments/HeartSteps_forecast.R")
@@ -158,7 +183,7 @@ as a list with the following important attributes:
 
 -- `SS_<index_type>_<method>` and `MS_<index_type>_<method>`: The sum of square and mean squared forecast errors for `method` = `focus` (\textsc{Focus}) and `ms` (mSSA).
 
-For obtaining the Figure 2(a) and 6(a)-(c), uncomment and run lines 117-149 and change the factor components for obtaining the correlation plots. The following line yields the Figure 2(c) and 2(d) in the manuscript. Figure 2(b), 6(d) and the other similar plots for different values of $T$ are also obtained as outputs.
+For obtaining the Figure 2(a) and 6(a)-(c), uncomment and run lines 117-149 and change the factor components for obtaining the correlation plots. The following line yields the Figure 2(c) and 2(d) in the paper. Figure 2(b), 6(d) and the other similar plots for different values of $T$ are also obtained as outputs.
 
 ```{r heartsteps_plots, warning=FALSE, fig.width = 12, fig.height = 6}
 source("HeartSteps_Experiments/HeartSteps_forecast_plot.R")

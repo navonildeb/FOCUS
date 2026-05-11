@@ -76,6 +76,13 @@ block_cross_validation <- function(time_series, block_size, spar_values) {
   spar_values[which.min(cv_errors)]
 }
 
+# Main function to fit smoothing spline with optimal spar
+fit_smoothing_spline <- function(time_series, block_size, spar_values = seq(0.1, 1, by = 0.1)) {
+  best_spar <- block_cross_validation(time_series, block_size, spar_values)
+  fit <- smooth.spline(seq_along(time_series), time_series, spar = best_spar)
+  list(fit = fit, best_spar = best_spar)
+}
+
 
 # staggered adoption treatment pattern
 staggered_adoption_matrix_xp1 <- function(S, TT, 
@@ -111,13 +118,6 @@ staggered_adoption_matrix_xp1 <- function(S, TT,
   }
   
   return(list(mat = mat, propensity_scores = propensity_scores))
-}
-
-# Main function to fit smoothing spline with optimal spar
-fit_smoothing_spline <- function(time_series, block_size, spar_values = seq(0.1, 1, by = 0.1)) {
-  best_spar <- block_cross_validation(time_series, block_size, spar_values)
-  fit <- smooth.spline(seq_along(time_series), time_series, spar = best_spar)
-  list(fit = fit, best_spar = best_spar)
 }
 
 
@@ -186,46 +186,97 @@ gen.var1.sw2002 <- function(d, n.user, n.time, Sigma.var, burn.in = 1000){
   return(X0)
 }
 
-### A function for quantifying the population forecast of ARMA(3,1)
+#### VARMA Simulator functions
+
+sim_VARMA11 <- function(TT, A1, B1, Sigma, burn_in = 100) {
+  r <- nrow(A1)
+  TT_full <- TT + burn_in
+  U <- matrix(0, TT_full, r)
+  err <- MASS::mvrnorm(TT_full, mu = rep(0, r), Sigma = Sigma)
+  U[1, ] <- err[1, ]
+  for (t in 2:TT_full) {
+    U[t, ] <- A1 %*% U[t - 1, ] + err[t, ] + B1 %*% err[t - 1, ]
+  }
+  U_out <- U[(burn_in + 1):TT_full, , drop = TRUE]
+  return(U_out)
+}
+
+### A function for quantifying the population forecast of VARMA(1,1)
 ### given the past observations
 
-# F0: vector of observed series (F0_1,...,F0_{TT}), with dimension r = 1
-# phi: AR(3) coefficients (e.g. c(phi1, phi2, phi3))
-# theta: MA(1) coefficient
-# h: forecast horizon (integer >= 1)
-arma31_forecast <- function(F0, phi, theta, h) {
-  TT <- length(F0)
-  phi1 <- phi[1]; phi2 <- phi[2]; phi3 <- phi[3]
-  theta1 <- theta
+VARMA11_forecast <- function(X, A1, B1, h) {
+  TT <- nrow(X)
+  r  <- ncol(X)
+  eps <- matrix(0, nrow = TT, ncol = r)
   
-  # Compute innovations recursively
-  eps <- numeric(TT)
   for (t in 1:TT) {
-    F0_1 <- ifelse(t-1 >= 1, F0[t-1], 0)
-    F0_2 <- ifelse(t-2 >= 1, F0[t-2], 0)
-    F0_3 <- ifelse(t-3 >= 1, F0[t-3], 0)
-    eps1 <- ifelse(t-1 >= 1, eps[t-1], 0)
-    eps[t] <- F0[t] - (phi1 * F0_1 + phi2 * F0_2 + phi3 * F0_3 + theta1 * eps1)
+    X_lag   <- if (t - 1 >= 1) X[t-1, ] else rep(0, r)
+    eps_lag <- if (t - 1 >= 1) eps[t-1, ] else rep(0, r)
+    
+    eps[t, ] <- X[t, ] -
+      as.vector(A1 %*% X_lag) -
+      as.vector(B1 %*% eps_lag)
   }
+  # forecasts
+  fcast <- matrix(0, nrow = h, ncol = r)
   
-  # Storage for forecasts
-  fcast <- numeric(h)
+  # h = 1 MA part appears
+  fcast[1, ] <- as.vector(A1 %*% X[TT, ]) +
+    as.vector(B1 %*% eps[TT, ])
   
-  # h = 1 forecast (includes MA part)
-  fcast[1] <- phi1 * F0[TT] + phi2 * F0[TT-1] + phi3 * F0[TT-2] + theta1 * eps[TT]
-  
-  # h >= 2 forecasts: pure AR recursion
+  # h >= 2 pure VAR recursion
   if (h >= 2) {
     for (k in 2:h) {
-      f1 <- fcast[k-1]
-      f2 <- if (k > 2) fcast[k-2] else F0[TT]      # for h=2
-      f3 <- if (k > 3) fcast[k-3] else F0[TT-1]    # for h=2,3
-      fcast[k] <- phi1 * f1 + phi2 * f2 + phi3 * f3
+      fcast[k, ] <- as.vector(A1 %*% fcast[k-1, ])
     }
   }
   return(fcast)
 }
 
+v_VARMA11_cov <- function(A1, B1, se.varma){
+  r <- nrow(A1)
+  stopifnot(ncol(A1) == r, nrow(B1) == r, ncol(B1) == r)
+  Sigma <- (se.varma^2) * diag(r)   # Var(eps_t)
+  C <- (A1 + B1) %*% Sigma %*% t(A1 + B1)   # C = (A+B) Sigma (A+B)'
+  # Solve S = C + A S A'  via vec(S) = (I - A \otimes A)^{-1} vec(C)
+  K <- diag(r * r) - kronecker(A1, A1)
+  vecS <- solve(K, as.vector(C))
+  S <- matrix(vecS, nrow = r, ncol = r)
+  Gamma0 <- Sigma + S  # Var(X_t) = Sigma + sum_{j>=0} A^j C (A^j)'
+  v_var <- sum(diag(Gamma0)) / r
+  return(v_var)
+}
+
+# v_target = v_VARMA11_cov(A1, B1, se.varma) in the data generation code
+periodic.trend.DGP4_init <- function(TT, r, v_target, omega_range = c(1, 50), coef_range  = c(-1, 10), nsr = 1){
+  P <- matrix(0, nrow = TT, ncol = r)
+  for (k in 1:r) {
+    a1 <- runif(1, min = coef_range[1], max = coef_range[2])
+    a2 <- runif(1, min = coef_range[1], max = coef_range[2])
+    w1 <- runif(1, min = omega_range[1], max = omega_range[2])
+    w2 <- runif(1, min = omega_range[1], max = omega_range[2])
+    pk <- a1 * cos(w1*(1:TT)/TT) + a2 * cos(w2*(1:TT)/TT)
+    s2 <- var(pk)  # sample variance over t=1..TT
+    scale <- if (s2 > 0) sqrt(v_target / (nsr * s2)) else 0 # change 3 to something else to control the SNR
+    P[, k] <- scale * pk
+  }
+  return(P)
+}
+
+periodic.trend.DGP4 <- function(TT, r, v_target, nsr = 1){
+  P <- matrix(0, nrow = TT, ncol = r)
+  for (k in 1:r) {
+    a1 <- 3
+    a2 <- 6
+    w1 <- 10
+    w2 <- 20
+    pk <- a1 * cos(w1*(1:TT)/TT) + a2 * cos(w2*(1:TT)/TT)
+    s2 <- var(pk)  # sample variance over t=1..TT
+    scale <- if (s2 > 0) sqrt(v_target / (nsr * s2)) else 0 # change 3 to something else to control the SNR
+    P[, k] <- scale * pk
+  }
+  return(P)
+}
 
 
 #Estimate the factors and the loadings if the dimension of the latent space is given
@@ -315,6 +366,10 @@ est_pca_missing <- function(Y, W, r){
       WFF <- WFF + W[i,t] * (t(Ft) %*% Ft)
       WFY <- WFY + (W[i,t] * Y[i,t]) * Ft
     }
+    # if(any(eigen(WFF)$values < 10^-10)){
+    #   ### regularize the covariance matrix with a small penalty
+    #   WFF <- WFF + 10^-6 * diag(ncol(WFF))
+    # }
     L_est[i,] <- WFY %*% solve(WFF)
   }
   return(list(cov_mat = Sigma_eigen, factor_est = F_est, loading_est = L_est))
@@ -475,6 +530,128 @@ forecast_VAR <- function(X, A_list, h = 1) { # h = forecast horizon
   return(forecast)
 }
 
+
+ridge_solve <- function(A, B, lambda = 1e-6) {
+  solve(crossprod(A) + lambda * diag(ncol(A)), crossprod(A, B))
+}
+
+# map FFT frequencies -> your omega scale (w in cos(w*t/TT))
+top_omega_peaks <- function(y, TT, omega_range = c(1, 50), M = 6) {
+  y <- as.numeric(y)
+  n <- length(y)
+  Y <- fft(y - mean(y))
+  spec <- Mod(Y)^2
+  k <- 2:floor(n/2)                    # positive freqs
+  angle <- 2*pi*(k-1)/n                # radians per step
+  w_vals <- angle * TT                 # your omega scale
+  
+  keep <- which(w_vals >= omega_range[1] & w_vals <= omega_range[2])
+  if (length(keep) == 0) return(integer(0))
+  
+  ord <- order(spec[k][keep], decreasing = TRUE)
+  w_pick <- w_vals[keep][ord][1:min(M, length(ord))]
+  unique(as.integer(round(w_pick)))
+}
+
+make_detX_omega <- function(tt, TT_full, omega = integer(0), include_trend = TRUE) {
+  Xd <- matrix(1, length(tt), 1)
+  colnames(Xd) <- "Intercept"
+  if (include_trend) {
+    Xd <- cbind(Xd, tt)
+    colnames(Xd)[ncol(Xd)] <- "Trend"
+  }
+  for (w in omega) {
+    Xd <- cbind(Xd, cos(w * tt / TT_full), sin(w * tt / TT_full))
+    colnames(Xd)[(ncol(Xd)-1):ncol(Xd)] <- c(paste0("w", w, "_cos"), paste0("w", w, "_sin"))
+  }
+  Xd
+}
+
+# fit det with omega pair by BIC, then VAR(1) on residuals, forecast h
+forecast_detpair_var1 <- function(X, h,
+                                  omega_range = c(1, 50),
+                                  M_peaks = 6,
+                                  include_trend = TRUE,
+                                  ridge_lambda = 1e-6) {
+  if (!requireNamespace("vars", quietly = TRUE)) {
+    stop("Install 'vars': install.packages('vars')")
+  }
+  
+  X <- as.matrix(X)
+  TT <- nrow(X); r <- ncol(X)
+  if (is.null(colnames(X))) colnames(X) <- paste0("V", 1:r)
+  stopifnot(r == 2)
+  
+  t <- 1:TT
+  t_future <- (TT+1):(TT+h)
+  
+  # --- Step 0: light prewhiten for detection ---
+  var0 <- vars::VAR(X, p = 1, type = "const")
+  U0 <- residuals(var0)          # (TT-1) x r
+  # align indices (drop first time point)
+  t_u <- 2:TT
+  
+  # --- Step 1: candidate omegas from periodogram peaks (union across cols) ---
+  cand1 <- top_omega_peaks(U0[,1], TT = TT, omega_range = omega_range, M = M_peaks)
+  cand2 <- top_omega_peaks(U0[,2], TT = TT, omega_range = omega_range, M = M_peaks)
+  cand <- sort(unique(c(cand1, cand2)))
+  
+  # always allow "none" and "single"; and pairs among candidates
+  models <- list(integer(0))
+  models <- c(models, lapply(cand, function(w) c(w)))
+  if (length(cand) >= 2) {
+    pairs <- combn(cand, 2, simplify = FALSE)
+    models <- c(models, pairs)
+  }
+  
+  # --- Step 2: pick best deterministic model by BIC (fit on full data) ---
+  best_bic <- Inf
+  best_omega <- integer(0)
+  best_Beta <- NULL
+  best_Dhat <- NULL
+  
+  for (omega in models) {
+    Xd <- make_detX_omega(t, TT_full = TT, omega = omega, include_trend = include_trend)
+    Beta <- ridge_solve(Xd, X, lambda = ridge_lambda)
+    Dhat <- Xd %*% Beta
+    Uhat <- X - Dhat
+    
+    # Gaussian BIC on SSE (multivariate)
+    sse <- sum(Uhat^2)
+    kpar <- ncol(Xd) * r
+    bic <- TT * log(sse / (TT*r)) + kpar * log(TT)
+    
+    if (bic < best_bic) {
+      best_bic <- bic
+      best_omega <- omega
+      best_Beta <- Beta
+      best_Dhat <- Dhat
+    }
+  }
+  
+  Uhat <- X - best_Dhat
+  
+  # VAR(1) on residuals + forecast
+  var_fit <- vars::VAR(Uhat, p = 1, type = "const")
+  pred <- predict(var_fit, n.ahead = h)
+  
+  U_fc <- cbind(pred$fcst[[1]][,"fcst"], pred$fcst[[2]][,"fcst"])
+  colnames(U_fc) <- colnames(X)
+  
+  # deterministic forecast
+  Xd_f <- make_detX_omega(t_future, TT_full = TT, omega = best_omega, include_trend = include_trend)
+  D_fc <- Xd_f %*% best_Beta
+  
+  list(
+    omega_used = best_omega,
+    det_fitted = best_Dhat,
+    resid_fitted = Uhat,
+    forecast = D_fc + U_fc
+  )
+}
+
+
+
 forecast.mssa <- function(data_in, for_ind, t_start, t_end = NA){
   if(!is.data.frame(data_in))
     data_in <- as.data.frame(data_in)
@@ -491,4 +668,259 @@ forecast.mssa <- function(data_in, for_ind, t_start, t_end = NA){
   return(ms_predict$`Mean Predictions`)
 }
 
+########################################################################################################
+### Function for calculating coverage for DGP-1 in the paper
 
+fit_ar1_scalar <- function(f) {
+  f <- as.numeric(f)
+  x <- f[-length(f)]
+  y <- f[-1]
+  phi_hat <- sum(x * y) / sum(x^2)
+  eta_hat <- y - phi_hat * x
+  
+  list(
+    phi = phi_hat,
+    sigma_eta2 = mean(eta_hat^2),
+    sigma_F2 = mean(f^2)   # sample variance proxy for stationary factor variance
+  )
+}
+
+focus_ci_mcar_ar1 <- function(Y, W, h_max = 3, r = 1, alpha = 0.05,
+                              obs_pattern = "mcar") {
+  N <- nrow(Y)
+  TT <- ncol(Y)
+  deltaNT <- min(sqrt(N), sqrt(TT))
+  
+  Sigma_eigen <- est_pca_missing(Y, W, r)
+  F_est <- as.numeric(Sigma_eigen$factor_est[, 1])
+  L_est <- as.numeric(Sigma_eigen$loading_est[, 1])
+  
+  ar1 <- fit_ar1_scalar(F_est)
+  phi_hat <- ar1$phi
+  sigma_F2_hat <- mean(F_est^2)
+  
+  one_minus_phi2_hat <- max(0, 1 - phi_hat^2)
+  
+  W_mat <- as.matrix(W)
+  Y_mat <- as.matrix(Y)
+  
+  p_hat <- mean(W_mat)
+  
+  Y_hat_in <- outer(L_est, F_est)
+  resid_obs <- Y_mat - Y_hat_in
+  sigma_eps2_hat <- mean(resid_obs[W_mat == 1]^2)
+  
+  sigma_L2_hat <- mean(L_est^2)
+  
+  kappa_L_hat <- mean((L_est^2 / sigma_L2_hat - 1)^2)
+  
+  F_T_hat <- F_est[TT]
+  
+  theta_hat <- sapply(
+    1:h_max,
+    function(h) L_est * (phi_hat^h) * F_T_hat
+  )
+  
+  sigma_hat2 <- matrix(NA_real_, nrow = N, ncol = h_max)
+  xi2_hat <- matrix(NA_real_, nrow = N, ncol = h_max)
+  tau2_hat <- matrix(NA_real_, nrow = N, ncol = h_max)
+  
+  for (h in 1:h_max) {
+    xi2_common <- deltaNT^2 * (phi_hat^(2 * h)) * sigma_eps2_hat *
+      (L_est^2 / (N * sigma_L2_hat) +
+         F_T_hat^2 / (TT * sigma_F2_hat))
+    
+    if (obs_pattern == "mcar") {
+      xi2_base <- xi2_common / p_hat
+      
+      xi2_mcar_extra <- deltaNT^2 * (phi_hat^(2 * h)) *
+        (L_est^2 * F_T_hat^2 / (N * sigma_L2_hat)) *
+        (1 / p_hat - 1) *
+        kappa_L_hat
+      
+      xi2_h <- xi2_base + xi2_mcar_extra
+      
+    } else if (obs_pattern == "staggered" || obs_pattern == "simultaneous") {
+      xi2_h <- xi2_common
+      
+    } else {
+      stop("obs_pattern must be one of: 'mcar', 'staggered', 'simultaneous'")
+    }
+    
+    tau2_h <- deltaNT^2 * (h^2 / TT) *
+      (phi_hat^(2 * h - 2)) *
+      one_minus_phi2_hat *
+      L_est^2 *
+      F_T_hat^2
+    
+    xi2_hat[, h] <- xi2_h
+    tau2_hat[, h] <- tau2_h
+    sigma_hat2[, h] <- xi2_h + tau2_h
+  }
+  
+  z <- qnorm(1 - alpha / 2)
+  half_width <- z * sqrt(sigma_hat2) / deltaNT
+  
+  lower <- theta_hat - half_width
+  upper <- theta_hat + half_width
+  
+  colnames(theta_hat) <- paste0("h", 1:h_max)
+  colnames(lower) <- paste0("h", 1:h_max)
+  colnames(upper) <- paste0("h", 1:h_max)
+  colnames(sigma_hat2) <- paste0("h", 1:h_max)
+  colnames(xi2_hat) <- paste0("h", 1:h_max)
+  colnames(tau2_hat) <- paste0("h", 1:h_max)
+  
+  list(
+    theta_hat = theta_hat,
+    lower = lower,
+    upper = upper,
+    sigma_hat2 = sigma_hat2,
+    xi2_hat = xi2_hat,
+    tau2_hat = tau2_hat,
+    deltaNT = deltaNT,
+    
+    estimates = list(
+      F_est = F_est,
+      L_est = L_est,
+      phi_hat = phi_hat,
+      sigma_F2_hat = sigma_F2_hat,
+      sigma_eps2_hat = sigma_eps2_hat,
+      sigma_L2_hat = sigma_L2_hat,
+      kappa_L_hat = kappa_L_hat,
+      p_hat = p_hat,
+      F_T_hat = F_T_hat,
+      one_minus_phi2_hat = one_minus_phi2_hat
+    )
+  )
+}
+
+coverage_pipeline_ar1 <- function(
+    DGP = "DGP1",
+    N.arr = 2^c(5:9),
+    TT.arr = 2^c(5:9),
+    R.max = 30,
+    alpha = 0.05,
+    h_max = 3,
+    r = 1,
+    obs_pattern = "mcar",
+    ncores = 30) {
+  
+  cp_array <- array(NA_real_, dim = c(length(N.arr), length(TT.arr), h_max))
+  avg_len  <- array(NA_real_, dim = c(length(N.arr), length(TT.arr), h_max))
+  
+  hist_out <- vector("list", length(N.arr) * length(TT.arr))
+  names(hist_out) <- as.vector(outer(
+    paste0("N", N.arr),
+    paste0("T", TT.arr),
+    paste,
+    sep = "_"
+  ))
+  
+  base_dir <- file.path("data_files", paste0("Covg_", DGP))
+  
+  counter <- 1
+  
+  for (n_ind in seq_along(N.arr)) {
+    N <- N.arr[n_ind]
+    
+    for (t_ind in seq_along(TT.arr)) {
+      TT <- TT.arr[t_ind]
+      
+      registerDoMC(cores = ncores)
+      
+      out <- foreach(mc_iter = 1:R.max) %dopar% {
+        
+        file_name_C <- sprintf(
+          "%s/C0_files/%s_C0_N%d_T%d_iter%d.csv",
+          base_dir, DGP, N, TT, mc_iter
+        )
+        C0 <- as.matrix(read.csv(file_name_C))
+        C0 <- C0[, 1:h_max, drop = FALSE]
+        
+        file_name_Y <- sprintf(
+          "%s/Y_files/%s_Y_N%d_T%d_iter%d.csv",
+          base_dir, DGP, N, TT, mc_iter
+        )
+        Y_full <- as.matrix(read.csv(file_name_Y))
+        Y <- Y_full[, 1:TT, drop = FALSE]
+        
+        if (obs_pattern == "mcar") {
+          file_name_W <- sprintf(
+            "%s/W_files/%s_mcarW_N%d_T%d_iter%d.csv",
+            base_dir, DGP, N, TT, mc_iter
+          )
+        } else {
+          file_name_W <- sprintf(
+            "%s/W_files/%s_simultW_N%d_T%d_iter%d.csv",
+            base_dir, DGP, N, TT, mc_iter
+          )
+        }
+        
+        W <- as.matrix(read.csv(file_name_W))
+        
+        fit <- focus_ci_mcar_ar1(
+          Y = Y,
+          W = W,
+          h_max = h_max,
+          r = r,
+          alpha = alpha,
+          obs_pattern = obs_pattern
+        )
+        
+        covered <- C0 >= fit$lower & C0 <= fit$upper
+        ci_len <- fit$upper - fit$lower
+        
+        cover_h <- colMeans(covered)
+        len_h <- colMeans(ci_len)
+        z_forecast <- fit$deltaNT * (fit$theta_hat - C0) / sqrt(fit$sigma_hat2)
+        
+        list(
+          cover = cover_h,
+          len = len_h,
+          z_forecast = z_forecast
+        )
+      }
+      
+      registerDoSEQ()
+      
+      cover_mat <- do.call(rbind, lapply(out, `[[`, "cover"))
+      len_mat <- do.call(rbind, lapply(out, `[[`, "len"))
+      
+      cp_array[n_ind, t_ind, ] <- colMeans(cover_mat)
+      avg_len[n_ind, t_ind, ] <- colMeans(len_mat)
+      
+      z_array <- array(
+        NA_real_,
+        dim = c(N, h_max, R.max),
+        dimnames = list(
+          unit = paste0("i", 1:N),
+          horizon = paste0("h", 1:h_max),
+          iter = paste0("iter", 1:R.max)
+        )
+      )
+      
+      for (mc_iter in 1:R.max) {
+        z_array[, , mc_iter] <- out[[mc_iter]]$z_forecast
+      }
+      
+      hist_out[[counter]] <- list(
+        N = N,
+        TT = TT,
+        z_forecast = z_array
+      )
+      
+      cat(sprintf("Done: %s, N=%d, T=%d\n", DGP, N, TT))
+      
+      counter <- counter + 1
+    }
+  }
+  
+  list(
+    DGP = DGP,
+    obs_pattern = obs_pattern,
+    cp_array = cp_array,
+    avg_len = avg_len,
+    hist_out = hist_out
+  )
+}

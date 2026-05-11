@@ -1,0 +1,11 @@
+.DS_Store
+.Rhistory
+.RData
+.Rproj.user/
+__pycache__/
+.ipynb_checkpoints/
+Vignette_cache/
+data_files/
+*.RData
+*.rdb
+*.rdx
