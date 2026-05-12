@@ -1,14 +1,14 @@
 # Counterfactual Forecasting for Panel Data (FOCUS)
 
-This Github respository maintains the codes and experiments presented in our paper [**"Counterfactual Forecasting for Panel Data"**](https://navonildeb.github.io/files/focus_preprint.pdf).
+This respository maintains the codes and experiments presented in our paper **"Counterfactual Forecasting for Panel Data"**: [https://arxiv.org/abs/2511.06189](https://arxiv.org/abs/2511.06189).
  
 ---
 
 ## Overview
 
-**FOCUS** is a forecasting framework for counterfactual prediction in panel data with temporally correlated latent factors.
-This repository provides implementations of FOCUS alongside benchmark methods (**mSSA** and **SyNBEATS**), simulation scripts, and real-data experiments using the HeartSteps study.
-Comprehensive experimental details and figure reproduction instructions are provided in the reproducibility vignette (`Vignette.Rmd`), from which the accompanying `Vignette.pdf` is generated.  
+**FOCUS** is a forecasting framework for counterfactual outcomes in panel data with temporally correlated latent factors.
+This repository provides implementations of FOCUS alongside benchmark methods (**mSSA** and **SyNBEATS**) in simulated data and real-data experiments using the HeartSteps study.
+Comprehensive experimental details and figure reproducility instructions are provided in `Vignette.Rmd`, from which the accompanying `Vignette.pdf` is generated.  
 To regenerate all results and figures from scratch, set the option  
 `knitr::opts_chunk$set(echo = TRUE, cache = FALSE)`  
 in line 11 of `vignette.Rmd` before knitting.
@@ -39,14 +39,14 @@ source("library_causalTS.R")
 
 ### Simulation studies
 ```r
-source("gen_data_DGP0.R")     # data generation
-source("forecast_DGP0.R")     # forecasting (FOCUS and mSSA)
+source("R/gen_data_DGP0.R")     # data generation
+source("R/forecast_DGP0.R")     # forecasting (FOCUS and mSSA)
 ```
 
 ### SyNBEATS results
 Run `SyNBEATS_forecast.ipynb` and process outputs with:
 ```r
-source("syn_error_preprocess.R")
+source("R/syn_error_preprocess.R")
 ```
 
 ### HeartSteps study
